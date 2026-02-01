@@ -16,7 +16,31 @@ structure_sections=reference_only:verify_against_actual_contents
 [FORMAT]
 findings=table
 examples=code_blocks
-changelog=line_level_diffs
+changelog=semantic_diff_format
+
+[CHANGELOG_FORMAT]
+# Use semantic diff format showing file, location, and change description
+# Format:
+#   --- filename (context, line N)
+#   +++ Description of change
+#   +    added_line_1
+#   +    added_line_2
+#
+# Example:
+#   --- ry-install.fish (verify_static, line 844)
+#   +++ Added service file existence checks
+#   +    echo "── Service files ──"
+#   +    for svc_file in $SERVICE_DESTINATIONS
+#   +        _chk_file "$svc_file"
+#   +    end
+#
+# Rules:
+# - One block per distinct change location
+# - Include function/section context in parentheses
+# - Description line starts with +++ and explains the change
+# - Added lines prefixed with +    (plus and 4 spaces)
+# - Removed lines prefixed with -    (minus and 4 spaces)
+# - No unified diff headers or @@ markers
 
 [ENVIRONMENT]
 os=CachyOS
