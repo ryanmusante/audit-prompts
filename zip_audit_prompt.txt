@@ -1,0 +1,397 @@
+[TASK]
+type=zip_audit
+target=errors,compatibility,best_practices,correctness,completeness
+depth=exhaustive
+report=all_findings:not_just_obvious
+approach=adversarial:assume_bugs_exist:prove_correctness
+
+[PROMPT_USAGE]
+# This prompt is a reference guide, not a rigid specification
+adapt_sections=grow_or_shrink_based_on_archive_complexity
+modify_archive=expected:fix_bugs_directly_in_files
+output=corrected_archive:with_changelog
+discovery=use_grep_find_wc:to_determine_actual_structure
+structure_sections=reference_only:verify_against_actual_contents
+
+[FORMAT]
+findings=table
+examples=code_blocks
+changelog=line_level_diffs
+
+[ENVIRONMENT]
+os=CachyOS
+base=arch_linux
+shell=fish:exclusively
+init=systemd
+boot=systemd-boot
+filesystem=btrfs
+hardware=AMD_Strix_Halo
+cpu=Ryzen_AI_Max+_395:Zen5
+gpu=Radeon_8060S:RDNA3.5:gfx1151
+network=iwd+NetworkManager
+desktop=COSMIC
+
+[TOOL_REQUIREMENTS]
+install_first=fish:apt-get install -y fish
+fallback=if_tool_unavailable:note_skip:continue
+
+[SCOPE]
+include=shell_scripts,systemd_units,config_files,embedded_content
+skip=binaries,images
+embedded_types=systemd_units,config_files,udev_rules,modprobe_conf,sysctl_conf,tmpfiles_conf,environment_files,iwd_conf,nm_conf,resolved_conf,sdboot_conf,loader_conf,mkinitcpio_conf,wireless_regdom
+detect_embedded_by=heredoc_patterns,echo_blocks,case_statement_content
+
+# ============================================================================
+# ARCHIVE STRUCTURE REFERENCE
+# ============================================================================
+
+[ARCHIVE_CONTENTS]
+files=LICENSE,README.md,ry-install.fish
+
+[STRUCTURE:README.md]
+# Document sections - verify these exist and match code behavior
+sections=Quick_Start,Installer_Options,Safety_Notes,Laptop_Users,Security_Tradeoffs
+sections+=Implementation_Notes:Critical_Behaviors,Kernel_Parameters,Environment_Variables,Other_Design_Decisions
+sections+=Packages:Installed,Removed,Services_Masked,Services_Enabled
+sections+=Embedded_Files,Backup_&_Restore,COSMIC_Desktop
+sections+=Troubleshooting,Verification,Repository_Structure,License
+
+[STRUCTURE:ry-install.fish]
+# Script organization - verify sections exist via box-drawing headers
+sections=GLOBAL_CONFIGURATION
+sections+=FILE_DEFINITIONS
+sections+=EMBEDDED_FILE_CONTENTS:get_file_content_function
+sections+=PACKAGE_LISTS:PKGS_ADD,PKGS_DEL
+sections+=SYSTEMD_SERVICES:MASK_array
+sections+=KERNEL_PARAMETERS:KERNEL_PARAMS_array
+sections+=ENVIRONMENT_VARIABLES:ENV_VARS_array
+sections+=MKINITCPIO_HOOKS:MKINITCPIO_HOOKS_array
+sections+=LOGGING_FUNCTIONS
+sections+=COMMAND_EXECUTION
+sections+=VERIFICATION_HELPERS
+sections+=DEPENDENCY_CHECK
+sections+=BACKUP_FUNCTIONS
+sections+=FILE_INSTALLATION
+sections+=DIFF_FUNCTION
+sections+=STATIC_VERIFICATION
+sections+=RUNTIME_VERIFICATION
+sections+=MAIN_INSTALLATION
+sections+=LINT_CHECK
+sections+=HELP
+sections+=ENTRY_POINT
+
+[FUNCTIONS:ry-install.fish]
+# Function purposes - discover actual line numbers via: grep -n "^function " ry-install.fish
+get_file_content=Returns_embedded_file_content_by_path
+_log=Internal_logging:to_file_only
+_ok=Success_message:[OK]
+_fail=Failure_message:[FAIL]
+_info=Info_message:[INFO]
+_warn=Warning_message:[WARN]
+_err=Error_message:[ERR]
+_run=Execute_command_with_logging/dry-run
+_ask=Interactive_prompt:respects_--all
+_chk_file=Check_if_file_exists
+_chk_grep=Check_if_pattern_exists_in_file
+check_deps=Verify_required_commands
+backup_file=Backup_file_before_overwriting
+install_file=Write_content_with_chmod_0644+chown_root:root
+install_system_files=Install_all_system_files
+install_user_files=Install_all_user_files
+do_diff=Compare_embedded_vs_installed
+verify_static=Verify_config_files_exist
+verify_runtime=Verify_live_system_state
+do_install=Main_installation_routine
+do_lint=Fish_syntax_and_anti-pattern_check
+show_help=Display_help_message
+
+[EMBEDDED_FILES]
+# Paths defined in SYSTEM_DESTINATIONS, USER_DESTINATIONS, SERVICE_DESTINATIONS arrays
+# Content returned by get_file_content() function via case statements
+# Verify: each destination array entry has matching case in get_file_content
+system_files=/boot/loader/loader.conf,/etc/udev/rules.d/99-cachyos-udev.rules,/etc/modprobe.d/99-cachyos-modprobe.conf,/etc/environment,/etc/iwd/main.conf,/etc/mkinitcpio.conf,/etc/modules-load.d/99-cachyos-modules.conf,/etc/systemd/resolved.conf.d/99-cachyos-resolved.conf,/etc/sdboot-manage.conf,/etc/systemd/system.conf.d/99-cachyos-system.conf,/etc/systemd/user.conf.d/99-cachyos-user.conf,/etc/NetworkManager/conf.d/99-cachyos-nm.conf,/etc/conf.d/wireless-regdom
+user_files=~/.config/environment.d/10-ssh-auth-sock.conf,~/.config/fish/conf.d/10-ssh-auth-sock.fish
+service_files=/etc/systemd/system/amdgpu-performance.service,/etc/systemd/system/cpupower-epp.service
+user_files_note=matched_via_wildcard_pattern_in_get_file_content
+
+[EMBEDDED_CONTENT_TYPES]
+# Validation rules per embedded content type - not line counts
+loader.conf=key_value:default,timeout,console-mode,editor
+udev_rules=match_keys:ACTION,SUBSYSTEM,KERNEL,DRIVERS,ATTR:assignment_keys:MODE
+modprobe.conf=directives:options,blacklist,install
+environment=KEY=VALUE:no_export:no_quotes
+iwd_main.conf=ini_sections:[General],[DriverQuirks],[Network]
+mkinitcpio.conf=bash_arrays:MODULES,HOOKS,BINARIES,FILES,COMPRESSION
+sdboot_manage.conf=key=value:LINUX_OPTIONS,LINUX_FALLBACK_OPTIONS,OVERWRITE_EXISTING,REMOVE_OBSOLETE
+systemd_conf=ini_sections:[Manager]:directives:DefaultTimeout*
+nm.conf=ini_sections:[device],[connection],[logging]
+resolved.conf=ini_sections:[Resolve]
+wireless_regdom=WIRELESS_REGDOM="XX":2_letter_country_code
+ssh_auth_sock.conf=systemd_environment.d:KEY=VALUE
+ssh_auth_sock.fish=fish_syntax:status_is-interactive,set_-gx
+systemd_service=ini_sections:[Unit],[Service],[Install]:ExecStart_quoting
+
+[GLOBAL_VARIABLES]
+# Discover actual values via: grep "^set -g " ry-install.fish
+VERSION=Script_version_string
+DRY=Dry-run_mode_flag:default_false
+ALL=Unattended_mode_flag:default_false
+TIMESTAMP=Log_file_timestamp:date_format
+HOME=User_home_directory:with_fallbacks
+BACKUP_DIR=Backup_location:$HOME/.backup/$TIMESTAMP
+LOG_FILE=Log_file_path:$HOME/cachyos-dots-$TIMESTAMP.log
+SYSTEM_DESTINATIONS=Array_of_system_file_paths
+USER_DESTINATIONS=Array_of_user_file_paths
+SERVICE_DESTINATIONS=Array_of_service_file_paths
+PKGS_ADD=Packages_to_install
+PKGS_DEL=Packages_to_remove
+MASK=Services_to_mask
+KERNEL_PARAMS=Kernel_cmdline_parameters
+ENV_VARS=Environment_variables
+MKINITCPIO_HOOKS=mkinitcpio_hook_order
+SUDO_KEEPALIVE_PID=Background_sudo_refresh_process_PID
+
+[CLI_OPTIONS]
+--all=Unattended_installation:auto-yes_to_all_prompts
+--dry-run=Preview_changes_without_modifying_system
+--diff=Compare_embedded_files_against_installed_system
+--verify=Run_full_verification:static+runtime
+--verify-static=Verify_config_file_existence_and_content
+--verify-runtime=Verify_live_system_state:run_after_reboot
+--lint=Run_fish_syntax_and_anti-pattern_checks
+-h,--help=Display_help_message
+-v,--version=Display_version
+
+[INSTALLATION_STAGES:do_install]
+# Discover actual stages via section headers in do_install function
+# Each stage marked with box-drawing comment: # ════════...
+stages=PRE-FLIGHT_CHECKS,CREATE_BACKUP_DIRECTORY,MIRROR_RANKING,PACKAGE_INSTALLATION,SECURITY_WARNING,SYSTEM_FILES_INSTALLATION,LUKS_ENCRYPTION_CHECK,WIRELESS_REGULATORY_DOMAIN,USER_FILES_INSTALLATION,AMDGPU_PERFORMANCE_SERVICE,COSMIC_DESKTOP_CONFIGURATION,POST-INSTALLATION_TASKS,WIFI_RECONNECTION,COMPLETION
+key_behaviors=sudo_keepalive_background_process,signal_handlers_for_cleanup,LVM_detection_for_safe_masking,iwd_package_check_before_nm_files
+
+[VERIFICATION_CHECKS:verify_static]
+# Checks config files exist and contain expected values
+# Cross-reference: values should match corresponding global arrays
+boot_config=mkinitcpio.conf:MODULES_HOOKS,sdboot-manage.conf:LINUX_OPTIONS,loader.conf
+system_config=environment:ENV_VARS,modprobe.conf,udev_rules,systemd_timeouts,NetworkManager,iwd,resolved
+user_config=ssh_auth_sock_files
+services=masked_services_vs_MASK_array
+
+[VERIFICATION_CHECKS:verify_runtime]
+# Checks live system state - requires reboot after install
+kernel_cmdline=KERNEL_PARAMS_in_/proc/cmdline
+hardware_state=GPU_dpm_level,CPU_governor,CPU_EPP
+module_state=blacklisted_not_loaded,module_params_match_config
+service_state=enabled_services_running
+environment_state=ENV_VARS_via_printenv
+ntsync=/dev/ntsync_exists
+wifi_state=iwd_running,regulatory_domain
+
+[IMPLEMENTATION_NOTES]
+# Key design decisions documented in script header comments
+# Verify header comments match actual code behavior
+GPU_POWER_MANAGEMENT=udev_rule_may_fail:use_service_fallback
+MKINITCPIO_HOOKS=resume_omitted:sd-encrypt_not_default
+HARDWARE_SPECIFIC=mt7925e_for_MediaTek_only
+SECURITY_CONSIDERATIONS=split_lock_detect_DoS:loader_editor_disabled
+WIFI_CONFIGURATION=iwd_required:do_not_enable_iwd.service_separately
+CODE_PATTERNS=eval_in__run:controlled_inputs_only:exit_0_in_services
+
+[PREVIOUS_CHANGELOG]
+# Reference only - actual changes determined by audit
+# Remove this section if not maintaining changelog history
+note=audit_should_discover_issues_fresh:not_rely_on_previous_findings
+
+# ============================================================================
+# AUDIT PROCEDURE
+# ============================================================================
+
+[STEP:1:VERIFY]
+command=unzip -t <archive>
+on_fail=report_error,stop
+
+[STEP:2:EXTRACT]
+action=extract_all
+preserve=directory_structure
+on_empty_scope=report,stop
+
+[STEP:3:READ_DOCS]
+targets=README.md,LICENSE,inline_comments,header_comments
+gather=stated_behavior,dependencies,assumptions,target_paths
+flag=doc_claims_not_matching_code:as_MEDIUM
+verify=VERSION_in_header_matches_VERSION_variable
+verify=documented_functions_exist
+verify=documented_files_exist_in_get_file_content
+
+[STEP:4:SYNTAX_CHECK]
+fish=fish --no-execute <file>
+systemd=systemd-analyze verify <unit>:extract_embedded_first
+yaml=yq eval '.' <file>
+yaml_note=mikefarah/yq
+toml=taplo check <file>
+json=jq '.' <file>
+ini=python3 -c "import configparser; c=configparser.ConfigParser(); c.read('<file>')"
+on_syntax_error=record:severity_CRITICAL:continue_analysis
+
+[STEP:5:VALIDATE_EMBEDDED]
+for_each=embedded_content_block:in_get_file_content_function
+systemd=validate_unit_syntax:section_headers,directives,ExecStart_quoting
+modprobe=validate_directives:options,blacklist,install
+udev=validate_match_keys:ACTION,SUBSYSTEM,KERNEL,DRIVERS,ATTR
+udev=validate_assignment_keys:MODE
+iwd=validate_section_headers:[General],[DriverQuirks],[Network]
+nm_conf=validate_section_headers:[device],[connection],[logging]
+resolved_conf=validate_section_headers:[Resolve]
+systemd_conf=validate_section_headers:[Manager]
+mkinitcpio=validate_array_syntax:MODULES,HOOKS,COMPRESSION
+sdboot=validate_key=value:LINUX_OPTIONS,LINUX_FALLBACK_OPTIONS
+loader.conf=validate_key_value:default,timeout,console-mode,editor
+environment=validate_KEY=VALUE:no_export_keyword:no_quotes_needed
+wireless_regdom=validate_WIRELESS_REGDOM:2_letter_uppercase
+on_embedded_syntax_error=record:severity_HIGH:note_line_in_script
+
+[STEP:6:ANALYZE]
+depth=line_by_line
+thoroughness=flag_all_issues:including_minor:including_style
+
+# 6a: Reference Integrity
+orphan_refs=undefined_functions,undefined_variables,missing_files,unused_variables,unused_functions
+stale_refs=comments_referencing_removed_code
+internal_paths=destination_arrays_match_get_file_content_cases
+array_consistency=KERNEL_PARAMS_matches_embedded_sdboot-manage.conf
+array_consistency=ENV_VARS_matches_embedded_/etc/environment
+array_consistency=MKINITCPIO_HOOKS_matches_embedded_mkinitcpio.conf
+
+# 6b: Dependencies
+missing_deps=undeclared_commands,invalid_paths,missing_error_handling
+required_commands=pacman,systemctl,mkinitcpio,udevadm,sysctl,sdboot-manage
+optional_commands=cachyos-rate-mirrors,rate-mirrors,updatedb,pkgfile,iwctl,cosmic-comp
+missing_guards=no_command_-q_before_optional_tool
+assumed_root=sudo_used_consistently
+
+# 6c: Security
+security=unsafe_permissions,unquoted_variables,world_writable,hardcoded_secrets,injection_risks
+eval_safety=_run_function:only_script-controlled_inputs:no_user_data
+temp_files=mktemp_used:chmod_0644_before_move
+privilege=sudo_before_system_file_writes
+file_perms=mktemp_creates_0600:system_configs_need_0644:handled_by_chmod
+file_ownership=system_files_need_root:root:handled_by_chown
+passphrase_handling=wifi_pass:cleared_immediately:not_in_process_list
+signal_handlers=INT_TERM_cleanup_SUDO_KEEPALIVE_PID
+
+# 6d: Fish Compliance
+fish_compat=bash_$():use_(command)
+fish_compat=bash_[[]]:use_test_or_[]
+fish_compat=bash_export:use_set_-gx
+fish_compat=bash_&&:use_and
+fish_compat=bash_||:use_or
+fish_compat=bash_!:use_not
+fish_compat=bash_${var}:use_$var
+fish_compat=bash_`cmd`:use_(cmd)
+fish_compat=bash_source:use_source_or_.
+prefer=string_functions:over_sed_awk_for_simple_ops
+prefer=set_-l:for_local_variables
+prefer=test:over_[_]_for_conditionals
+
+# 6e: Systemd Units
+systemd_embedded=amdgpu-performance.service,cpupower-epp.service
+systemd=valid_section_headers:[Unit],[Service],[Install]
+systemd=After_target_exists:graphical.target,cpupower.service
+systemd=Wants_target_exists:cpupower.service
+systemd=WantedBy_target_exists:graphical.target,multi-user.target
+systemd=ConditionPathIsDirectory_paths_valid
+systemd=Type=oneshot:requires_RemainAfterExit_for_enable
+systemd=ExecStart_paths_exist:/bin/bash
+systemd=ExecStart_quoting:escaped_single_quotes_in_bash_-c
+
+# 6f: Logic
+logic=race_conditions,unhandled_edge_cases,missing_validation,silent_failures,unchecked_return_codes
+logic=background_process_cleanup_on_all_exit_paths:SUDO_KEEPALIVE_PID
+logic=return_vs_exit_in_functions:functions_use_return
+logic=error_propagation:_run_returns_command_status
+logic=dry_run_consistency:all_modifications_check_DRY
+logic=all_mode_consistency:_ask_respects_ALL
+
+# 6g: Idempotency
+idempotency=operations_safe_to_run_twice
+idempotency=atomic_writes:mktemp_then_mv
+idempotency=mkdir_-p:safe_if_exists
+idempotency=pacman_--needed:skips_installed
+idempotency=systemctl_enable:safe_if_already_enabled
+idempotency=systemctl_mask:safe_if_already_masked
+idempotency=backup_guards:checks_file_exists_before_backup
+
+# 6h: Style
+style=inconsistent_naming,missing_comments,poor_structure,magic_numbers,dead_code
+style=box_drawing_headers:consistent_throughout
+style=function_naming:_prefix_for_internal,do_prefix_for_modes
+style=variable_naming:UPPERCASE_for_globals,lowercase_for_locals
+
+# 6i: Documentation Consistency
+doc_consistency=README_version_matches_script_VERSION
+doc_consistency=README_kernel_params_match_KERNEL_PARAMS_array
+doc_consistency=README_env_vars_match_ENV_VARS_array
+doc_consistency=README_services_masked_match_MASK_array
+doc_consistency=README_packages_match_PKGS_ADD_PKGS_DEL
+
+[STEP:7:WEB_VERIFY]
+sources=arch_wiki,cachyos_wiki,man_pages,freedesktop.org,kernel.org
+verify=package_names:pacman_-Si
+verify=systemd_directive_names:systemd.unit,systemd.service
+verify=modprobe_options:amdgpu,btusb,usbcore,nvme_core,mt7925e
+verify=udev_keys:udev(7)
+verify=kernel_params:kernel-parameters.txt
+verify=iwd_config:iwd.config(5)
+verify=nm_config:NetworkManager.conf(5)
+on_no_source=note_assumption:[medium]_confidence:proceed
+on_deprecated=flag:recommend_replacement
+
+[STEP:8:GENERATE_TABLE]
+columns=#,Severity,Category,Line(s),Issue,Recommendation
+severity_levels=CRITICAL,HIGH,MEDIUM,LOW,INFO
+severity_order=CRITICAL>HIGH>MEDIUM>LOW>INFO
+sort=severity_descending:then_line_asc
+include=all_severities
+category_values=syntax,reference,dependency,security,fish-compat,systemd,config,logic,idempotency,style,consistency,completeness,documentation
+
+[SEVERITY:DEFINITIONS]
+CRITICAL=will_cause_failure,data_loss,security_vulnerability,wrong_permissions,system_unbootable
+HIGH=likely_bug,significant_misbehavior,missing_critical_check,security_concern
+MEDIUM=correctness_concern,poor_practice,potential_issue_under_conditions,doc_mismatch
+LOW=style,minor_improvement,defensive_hardening,optimization
+INFO=suggestion,cosmetic,nitpick
+
+[STEP:9:FIX]
+# Modify the actual files in the archive to fix issues
+action=edit_source_files_directly:not_just_report
+target=CRITICAL,HIGH,MEDIUM:all_fixed
+target=LOW:fix_if_straightforward
+target=INFO:fix_only_if_zero_cost
+method=str_replace:preferred:minimal_changes
+preserve=author_style,existing_comments,box_drawing
+on_conflict=prioritize_higher_severity:note_tradeoff
+on_ambiguity=choose_safest_option:document_reasoning
+
+[STEP:10:RECHECK]
+action=fish_--no-execute:on_modified_script
+on_new_errors=fix_immediately:repeat
+
+[STEP:11:VERIFY_LOOP]
+11a=rerun_full_analysis:steps_4-6:on_modified_files
+11b=check_fixes_didnt_introduce_new_issues
+11c=if_findings_remain:fix,repeat
+11d=max_passes=3
+11e=on_persist=report_unresolved:explain_why
+
+[STEP:12:FUNCTIONAL_TEST]
+test_modes=--help,--version,--lint,--diff,--dry-run
+verify=each_mode_executes_without_error
+verify=--version_outputs_version_matching_VERSION_variable
+verify=--lint_passes_without_errors
+verify=output_matches_documented_behavior
+
+[STEP:13:OUTPUT]
+present=changed_files_only:in_zip
+include=changelog_summary
+format=single_zip:plus_text_changelog
+exclude=unmodified_files
+on_no_changes=report:"No findings requiring fixes"
