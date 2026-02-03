@@ -1,0 +1,40 @@
+4:47 PM
+
+Core Terms:
+Term	Definition
+Chat/Session/Conversation	Entire exchange from start to end
+Turn	One user message + one assistant response
+Message	Single block of text from user or assistant
+Response/Reply	Assistant's single output to a user message
+Prompt	Input text given to the model
+System Prompt	Hidden instructions defining assistant behavior
+User Prompt	Your message/question
+Context Window	Total tokens the model can see (includes system prompt, chat history, current message)
+Token	Unit of text (~4 characters or ~¾ word in English)
+
+Prompt Engineering Terms:
+Term	Definition
+Few-shot	Providing examples in the prompt to guide output format
+Zero-shot	No examples, just instructions
+Chain-of-thought	Asking model to reason step-by-step
+Role prompting	"You are a [expert]..." framing
+Instruction	Direct command ("List 5 items")
+Constraint	Limitation ("Under 100 words")
+Persona	Defined character/voice for responses
+
+Claude-Specific:
+Term	Definition
+Memory	Persistent user preferences across chats
+Artifact	Rendered output (code, documents, visualizations)
+Tool call	Model invoking external function (bash, search, etc.)
+Context compaction	Summarizing old messages when context fills
+
+
+Claude is AI and can make mistakes. Please double-check responses.
+Artifacts
+Changelog v2.0.14
+TXT 
+Ry install fixed
+ZIP 
+Audit findings
+Document · MD 
