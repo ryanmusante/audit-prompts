@@ -1,0 +1,650 @@
+ry-install.fish — Full Audit Prompt
+
+Paste this entire prompt into a new chat. Attach ry-install.zip
+(containing ry-install.fish, README.md, LICENSE). No other context
+needed — the prompt is self-contained.
+
+
+Instructions
+
+You are auditing ry-install.fish, a ~6200-line Fish shell script that
+configures CachyOS (Arch Linux) on a Beelink GTR9 Pro (AMD Strix Halo).
+The script manages 18 embedded config files, kernel parameters, packages,
+systemd services, WiFi reconnection, and system verification. It is
+single-file by design.
+
+Use the audit-context-building skill
+(/mnt/skills/user/audit-context-building/SKILL.md) for the deep analysis
+phase, followed by the verification-before-completion skill
+(/mnt/skills/user/verification-before-completion/SKILL.md) before
+finalizing the report. Read both skill files before starting — they
+contain methodology requirements that override any assumptions about
+how to structure the analysis.
+
+
+Container Setup (CRITICAL — do this in Phase 0)
+
+The container does not have fish installed by default. You MUST install
+it before any syntax checks or config extraction:
+
+    apt-get update -qq && apt-get install -y -qq fish
+
+Verify with: fish --version
+
+Fish is required for:
+  - fish --no-execute ry-install.fish (syntax validation)
+  - Validating embedded fish snippets (ssh-auth-sock.fish)
+
+If fish installation fails, note it in the report, skip syntax checks,
+and continue all other checks.
+
+
+Context Management (CRITICAL — prevents stalls)
+
+  - Targeted reads, not sequential chunks. Use rg/grep/awk to scan
+    for specific patterns across the whole file. Do NOT read the
+    script in 13 sequential 500-line chunks — this exhausts context.
+    Build the state model from ~5-6 targeted pattern scans (globals,
+    functions, sudo calls, file writes, external commands, error
+    handling) instead.
+  - Write findings incrementally. Append each finding to
+    /home/claude/ry-audit/findings.txt as discovered. Never hold
+    more than one finding unsaved in thinking blocks.
+  - State model: Build in /home/claude/ry-audit/state-model.txt.
+    Update in-place as new patterns are scanned — do not create
+    per-chunk files.
+  - Phase saves: At the end of Phase 1, verify state-model.txt is
+    complete. At the end of Phase 2, save checklist results to
+    /home/claude/ry-audit/checklist.txt.
+  - Read, don't re-read. After Phase 1, reference your saved state
+    model — don't re-scan the entire script for Phase 2. Only re-read
+    specific lines (sed -n 'N,Mp') to verify findings. Max 3 reads
+    per file section.
+  - Batch aggressively. Compound bash commands. Multiple grep/awk
+    extractions in one call.
+  - Resume from compaction: After context compaction, read
+    /home/claude/ry-audit/progress.txt to determine completed phases.
+    Read findings.txt and state-model.txt to recover state. Resume
+    from last incomplete phase — don't restart.
+
+  Tool call budget (target 30-40 total):
+    Phase 0: 3-4 calls (install fish, extract, read skills, plan)
+    Phase 1: 10-12 calls (targeted pattern scans, state model)
+    Phase 2: 8-10 calls (checklist verification, line re-reads)
+    Phase 3: 3-4 calls (automated cross-refs, anti-patterns, format)
+    Phase 4: 3-4 calls (report generation, verification, delivery)
+
+
+Phase 0 — Setup
+
+  1. Install fish: apt-get update -qq && apt-get install -y -qq fish
+     Verify: fish --version
+  2. Extract the uploaded zip to /home/claude/ry-install/.
+     Create /home/claude/ry-audit/. Initialize progress.txt.
+  3. Read both skill files:
+       /mnt/skills/user/audit-context-building/SKILL.md
+       /mnt/skills/user/verification-before-completion/SKILL.md
+     Follow their methodology — they define the analysis format,
+     state model structure, and verification requirements.
+  4. Count lines in each file. State the plan (estimated tool calls
+     per phase). Proceed without asking.
+
+
+Phase 1 — Deep Context Build (audit-context-building skill)
+
+Build the state model via targeted pattern scans, NOT sequential reads.
+Write results to /home/claude/ry-audit/state-model.txt.
+
+Recommended scan passes (batch into ~5-6 compound commands):
+
+  Pass 1 — Structure map:
+    grep -n '^function \|^end$\|^set -g ' ry-install.fish
+    (All globals, all function boundaries)
+
+  Pass 2 — Security surface:
+    grep -n 'sudo \|chmod \|chown \|rm -rf\|mktemp\|tee \|install_file' ry-install.fish
+    (Privilege escalation, file writes, temp files)
+
+  Pass 3 — External commands:
+    grep -n 'command -q\|test -f.*bin\|which ' ry-install.fish
+    (Command availability checks)
+
+  Pass 4 — Error handling:
+    grep -n 'or return\|or begin\|set status\|INSTALL_HAD_ERRORS\|_err \|_fail ' ry-install.fish
+    (Error propagation patterns)
+
+  Pass 5 — Input handling:
+    grep -n 'read -\|argv\|SSID\|PASS\|_ask \|argparse' ry-install.fish
+    (User input paths, credential handling)
+
+  Pass 6 — Targeted deep reads:
+    Read specific functions requiring full analysis (sed -n for exact
+    line ranges identified in Pass 1):
+      install_file, _run, _cleanup/_do_cleanup, _install_collect_wifi,
+      WiFi deployment block, lock acquisition, get_file_content,
+      do_uninstall
+
+For each deep-read function, analyze proportionally:
+
+Full depth (block-by-block):
+  install_file, _run, _cleanup/_do_cleanup, _install_collect_wifi,
+  WiFi deployment block, lock acquisition, get_file_content,
+  do_uninstall
+
+Medium depth (inputs, outputs, error paths):
+  validate_*, verify_static, verify_runtime, do_diagnose, do_lint,
+  do_clean, _install_packages
+
+Brief (purpose + callers only):
+  _ok/_fail/_warn/_info/_echo/_msg/_log, _banner,
+  _chk_grep/_chk_file, _gather_temps/_gather_gpu_state/
+  _gather_cpu_state, show_help, do_completions
+
+Do not report items already documented as intentional design choices in
+the script header comments (lines 1-22). These include: cmdline/modprobe
+duplication, ppfeaturemask location, amdgpu-performance.service
+workaround, iwd.service not enabled, sleep masked, simpledrm
+blacklisted, non-interactive pacman, unquoted numeric tests
+(pre-initialized), and single-file architecture.
+
+After all passes: update progress.txt, verify state-model.txt is saved.
+
+
+Phase 2 — Checklist Audit (28 items)
+
+Read your saved state-model.txt. Evaluate every item below. For each:
+PASS/FAIL/WARN + line numbers or function names as evidence. Verify by
+re-reading specific lines — don't rely on memory. Save results to
+checklist.txt.
+
+Functional Checklist
+
+inputs
+  All external inputs validated: argv, SSID, passphrase, interface
+  name, fish version, HOME, kernel version, regdom code, log target.
+  Length limits, charset restrictions, type validation, empty handling.
+
+syntax
+  Pre-deploy validation: fish --no-execute, systemd-analyze verify,
+  INI section headers, modprobe format, mkinitcpio hook
+  existence/order. Every validate_* function.
+
+strict-modes
+  Error propagation: or return 1 pattern, error counters,
+  INSTALL_HAD_ERRORS. No silent failures in install path.
+
+entry-points
+  Single entry via arg parser. No eval, no dynamic dispatch, no
+  sourced files. Index-based parsing, unknown args rejected.
+
+arg-contract
+  Functions validate argument counts. argparse used where appropriate.
+  Check: get_file_content, _chk_grep, _chk_file, install_files,
+  _backup_path.
+
+options-parity
+  Every help-documented flag has a parser case. Every parser case is
+  help-documented (no hidden flags). Every mode set in parser has a
+  dispatch case. Every dispatch case calls a defined function.
+  Modifier flags (--all, --force, --verbose, --dry-run, --no-color,
+  --json) do NOT set MODE or increment mode_count. Short flags (-h,
+  -v) map to correct long forms. Wildcard case handles unknown args
+  with exit 2.
+
+exit-codes
+  0=success, 1=error, 2=usage, 130=interrupt. Every mode returns
+  appropriate code. Main exit propagates correctly through subshell
+  boundary.
+
+ext-cmd-audit
+  All external commands checked with command -q or test -f before use.
+  Check pacman, systemctl, mkinitcpio, iw, nmcli, sensors, nvme,
+  ethtool, dmidecode, paccache, stress-ng, coredumpctl, lspci,
+  mokutil, pkgfile, findmnt.
+
+idempotency
+  Re-running produces same result. pacman --needed. Atomic overwrites.
+  Mask/enable idempotent. No append-only operations, no duplicate
+  entries.
+
+file-writes
+  Atomic: mktemp → write → chmod → mv. Symlink check. Permissions:
+  0644 configs, 0600 creds, 0700 dirs. Ownership: root:root system,
+  user for user files. Both sudo and non-sudo paths in install_file.
+  WiFi .nmconnection.
+
+security
+  WiFi creds: 0600, not logged, memory-cleared in ALL paths.
+  Passphrase redacted in _run. Root forces dry-run. SSID sanitized.
+  Symlink prevention on all temp files. Parent dir ownership verified.
+  No secrets in logs.
+
+signals
+  INT/TERM/HUP handlers. fish_exit handler. _CLEANUP_DONE guard.
+  Sudo keepalive killed. Temp files cleaned. Lock released.
+
+var-scope
+  Proper set -g vs set -l. No leaks. WiFi creds erased in every path
+  (success, failure, dry-run, interrupt).
+
+rollback
+  Auto-backups before mutation: /boot + SYSTEM_DESTINATIONS.
+  Timestamped. Uninstall reverses: stop → remove → unmask →
+  daemon-reload. README documents recovery.
+
+privilege-sep
+  Root forces dry-run. sudo only when needed. User files skip sudo.
+  Restricted sudo detected/warned. --all aborts without unrestricted
+  sudo. WiFi credential prompts in --all mode are intentional —
+  secrets cannot be automated safely.
+
+path-safety
+  --preserve-root on rm -rf. No hardcoded HOME. XDG checked. mktemp
+  for all temp files. No /tmp race conditions.
+
+output-contract
+  Log structure: header → terminal → detailed. JSON for --diagnose.
+  Exit codes match docs.
+
+cross-refs
+  Automated — run Phase 3 bash block. All counts must match.
+  Count mismatches: MEDIUM severity unless they indicate missing
+  functionality (HIGH) or data loss risk (CRITICAL).
+
+docs
+  README covers all modes and options. Header comments cover design
+  tradeoffs. No undocumented modes.
+
+compat
+  Fish 3.3+ check. Kernel version checks (ntsync 6.14+). Graceful
+  degradation on missing commands.
+
+systemd
+  Drop-in paths correct. Section headers present. daemon-reload after
+  unit changes. ConditionPath* in services.
+
+pacman
+  --needed. -Syu not -Sy. --noconfirm documented. Retry with -Syyu.
+  Removal logged.
+
+networking
+  Connectivity check before packages. WiFi reconnect is LAST. Regdom
+  validated. NM restart after backend change.
+
+concurrency
+  Atomic mkdir lock. Stale recovery (PID check + rmdir+mkdir). Lock
+  released on all exits. PID written immediately after mkdir.
+
+logging
+  Timestamps cached. stderr dedup. Large output truncated. Sensitive
+  data excluded. Rotation (MAX_LOGS). Per-mode files.
+
+lint
+  Self-lint: fish --no-execute, anti-pattern scan, internal
+  consistency. Version cross-check (header, README, global).
+
+anti-patterns
+  echo "$var" | pipe (flag misparse risk) — prefer printf '%s\n'.
+  Bash-isms: $(), [[]], export, &&, ||, ${var}. rm -rf without
+  --preserve-root or safe scope. Unquoted numeric tests (document
+  if pre-initialized, flag if not).
+
+dry-run
+  ALL writes respect DRY. _run returns 0. Backups skipped. QUIET
+  forced false. sudo skipped or sudo -n for read-only.
+
+test-matrix
+  --test-all covers all safe modes. Parse check first. Per-mode logs.
+  Exit code = failure count.
+
+
+Phase 2b — Secondary Audit Areas
+
+After the 28-item checklist, verify these additional areas. Each was
+identified as a gap in prior audits. Report results in a SECONDARY
+AUDIT section of the report.
+
+Data flow — error propagation:
+  Verify INSTALL_HAD_ERRORS is set after every _err call in install-
+  path functions (_install_packages, _install_system_files,
+  _install_configure_services, _install_rebuild_boot, _install_finalize).
+  Known risk area: interactive subsections (regdom, WiFi) where _err
+  calls may lack INSTALL_HAD_ERRORS. Grep: grep -n '_err' in each
+  function, check adjacent lines for INSTALL_HAD_ERRORS or _fn_err.
+
+Data flow — global state:
+  SYSTEM_UPGRADED set in _install_packages, consumed in
+  _install_rebuild_boot. NTSYNC_SUPPORTED set in check_kernel_version,
+  consumed in install_file. Verify no stale reads, no missing set -q
+  guards.
+
+README numerical claims:
+  Verify these README counts against the script:
+  - "--diagnose" check count (Options table AND Utilities section)
+  - "--status" section count ("12 sections")
+  - "--clean" target count ("7 targets")
+  - "--wifi-diag" section count ("10 sections")
+  - "--export" section count ("19 sections")
+  - Kernel Parameters count ("15")
+  - Environment Variables count ("4")
+  - Masked Services count ("8")
+  - Embedded Files count ("18")
+  Count method: grep section markers (_echo "──" or echo "##") in
+  each function body.
+
+Completions vs parser parity:
+  Extract long flags from do_completions and compare against parser
+  case statements. Short flags (-h, -v) should also be present.
+  --logs should have -xa subcommand completions.
+
+do_lint vs manual audit:
+  do_lint anti-pattern checks should cover: $(), [[]], export, &&/||,
+  ${var}. If missing any, flag as INFO (not a script defect, but a
+  lint gap). Do NOT add echo|pipe or rm -rf to do_lint — those require
+  context-sensitive analysis unsuitable for automated grep.
+
+Function deep-read coverage:
+  Phase 1 deep-reads should include ALL utility functions:
+  do_diagnose, do_status, do_clean, do_diff, do_export, do_logs,
+  do_wifi_diag, do_test_all, do_completions, do_lint, do_uninstall.
+  Brief-depth is acceptable for simple ones (do_export, do_logs).
+  Full depth required for: do_diagnose (JSON output, thresholds,
+  issue counting), do_clean (--dry-run per target, orphan edge case),
+  do_completions (flag parity).
+
+Verify coverage gaps:
+  Does verify_runtime cover aspects verify_static cannot (live kernel
+  cmdline, sysfs params, module params, env vars, service active
+  state, file permissions, parent dir permissions)? Are there system
+  aspects neither checks? (Known: systemd drop-in activation is not
+  checked at runtime — acceptable because systemd auto-loads drop-ins.)
+
+Edge cases to verify:
+  - _progress: division by zero guard (PROGRESS_TOTAL <= 0 early
+    return, ETA calc only when PROGRESS_CURRENT > 1)
+  - Stale lock TOCTOU: mkdir is the atomic gate, not kill -0
+  - check_kernel_version: handles CachyOS naming (6.14.2-1-cachyos-bore)
+  - check_disk_space: thresholds (root 2GB min, /boot 200MB min)
+  - WiFi GKeyFile escaping: backslash, semicolon, leading #,
+    leading/trailing space. Newlines rejected at input.
+  - Multiple wireless interfaces: first match wins (by design)
+
+
+Format-Specific Checks
+
+These are validated in Phase 3 (format audit). Results go in the
+FORMAT AUDIT section of the report.
+
+Validate by inspecting the printf/echo blocks inside each
+get_file_content case statement directly. Do not attempt to source
+the script into a fish harness — it has side effects (log dir
+creation, version check, etc.) that prevent sourcing.
+
+loader.conf
+  key value pairs only (default, timeout, console-mode, editor)
+
+udev
+  == match, = assign. ACTION==, SUBSYSTEM==, KERNEL==, ATTR{}
+
+modprobe
+  options <module> <params>, blacklist <module>
+
+environment.d
+  KEY=VALUE (no export, no quotes around value)
+
+iwd
+  Sections: [General], [DriverQuirks], [Network]
+
+mkinitcpio
+  MODULES=(), HOOKS=(), COMPRESSION=""
+
+sdboot-manage
+  LINUX_OPTIONS="", OVERWRITE_EXISTING, REMOVE_OBSOLETE
+
+systemd drop-ins
+  [Section] + Key=Value
+
+NetworkManager
+  Sections: [device], [connection], [logging]
+
+resolved
+  Section: [Resolve]
+
+regdom
+  WIRELESS_REGDOM="XX"
+
+
+Phase 3 — Anti-Pattern Scan + Cross-Reference Verification
+
+NOTE: The script uses backslash-continuation multi-line arrays for
+globals (SYSTEM_DESTINATIONS, KERNEL_PARAMS, etc.). Standard sed
+range patterns (/.../,/^$/p) will fail because there are no blank
+lines within these arrays. Use the awk state-machine patterns below.
+
+NOTE: This block uses bash process substitution (<()). The container's
+default /bin/sh may be dash, which does not support it. Run via:
+    bash -c '...'
+or invoke as a bash script.
+
+Run this as a single compound bash command:
+
+    cd /home/claude/ry-install
+
+    # 1. Fish syntax (fish was installed in Phase 0)
+    echo "=== FISH SYNTAX ==="
+    fish --no-execute ry-install.fish 2>&1; echo "exit=$?"
+
+    # 2. Bash anti-patterns (non-comment lines only)
+    sed '/^[[:space:]]*#/d' ry-install.fish > /tmp/ry-clean.fish
+    echo "=== bash \$() ==="
+    grep -nP '\$\(' /tmp/ry-clean.fish | grep -vP "(printf|echo|string |ExecStart|bash -c|awk)" | head -10
+    echo "=== bash [[ ]] ==="
+    grep -nP '(?<!\[)\[\[\s' /tmp/ry-clean.fish | head -10
+    echo "=== bash export ==="
+    grep -nP '^\s*export\s' /tmp/ry-clean.fish | head -10
+    echo "=== bash && || ==="
+    grep -nP '(?<!-)\s&&\s|(?<!-)\s\|\|\s' /tmp/ry-clean.fish | grep -vP "(bash -c|ExecStart|awk|sed)" | head -10
+    echo "=== bash \${var} ==="
+    grep -nP '\$\{[^(]' /tmp/ry-clean.fish | grep -vP "(bash -c|ExecStart|awk|sed)" | head -10
+    rm -f /tmp/ry-clean.fish
+
+    # 3. Cross-reference counts
+    # Uses awk state-machine for backslash-continuation arrays
+    echo "=== CROSS-REFS ==="
+    sys=$(awk '/^set -g SYSTEM_DESTINATIONS/{f=1} f && /^[^[:space:]]/ && !/^set -g SYSTEM_DESTINATIONS/{f=0} f' ry-install.fish | grep -cE '^\s+"/')
+    usr=$(awk '/^set -g USER_DESTINATIONS/{f=1} f && /^[^[:space:]]/ && !/^set -g USER_DESTINATIONS/{f=0} f' ry-install.fish | grep -cE '^\s+"')
+    svc=$(awk '/^set -g SERVICE_DESTINATIONS/{f=1} f && /^[^[:space:]]/ && !/^set -g SERVICE_DESTINATIONS/{f=0} f' ry-install.fish | grep -cE '^\s+"/')
+    total=$((sys + usr + svc))
+    cases=$(sed -n '/^function get_file_content$/,/^end$/p' ry-install.fish | grep -cE "case [\"'*/]")
+    wildcard=$(sed -n '/^function get_file_content$/,/^end$/p' ry-install.fish | grep -cE "case '\*'")
+    content_cases=$((cases - wildcard))
+    echo "DEST=$total (sys=$sys usr=$usr svc=$svc) cases=$content_cases"
+    ver_g=$(grep -m1 '^set -g VERSION' ry-install.fish | grep -oP '"[^"]+"' | tr -d '"')
+    ver_h=$(head -3 ry-install.fish | grep -oP 'v[\d.]+' | tr -d 'v')
+    ver_r=$(grep -oP 'v\d+\.\d+\.\d+' README.md | head -1 | tr -d 'v')
+    echo "VER: global=$ver_g header=$ver_h readme=$ver_r"
+    kp=$(awk '/^set -g KERNEL_PARAMS/{f=1} f && /^[^[:space:]]/ && !/^set -g KERNEL_PARAMS/{f=0} f' ry-install.fish | grep -cE '^\s+\S')
+    mask=$(awk '/^set -g MASK /{f=1} f && /^[^[:space:]]/ && !/^set -g MASK /{f=0} f' ry-install.fish | grep -cE '^\s+\S')
+    pkgs_add=$(grep '^set -g PKGS_ADD' ry-install.fish | sed 's/set -g PKGS_ADD //' | wc -w)
+    pkgs_del=$(grep '^set -g PKGS_DEL' ry-install.fish | sed 's/set -g PKGS_DEL //' | wc -w)
+    hooks=$(awk '/^set -g MKINITCPIO_HOOKS/{f=1} f && /^[^[:space:]]/ && !/^set -g MKINITCPIO_HOOKS/{f=0} f' ry-install.fish | grep -cE '^\s+\S')
+    env_vars=$(awk '/^set -g ENV_VARS/{f=1} f && /^[^[:space:]]/ && !/^set -g ENV_VARS/{f=0} f' ry-install.fish | grep -cE '^\s+"')
+    steps=$(awk '/^set -g PROGRESS_STEPS/{f=1} f && /^set -g PROGRESS_TOTAL/{f=0} f' ry-install.fish | grep -cE '^\s+"')
+    # Count _progress calls only within install-path functions
+    # (do_install, _install_*). Calls outside install path (e.g. in
+    # do_test_all comments or examples) are expected and excluded.
+    calls=$(grep -c '_progress "' ry-install.fish)
+    echo "KERNEL_PARAMS=$kp MASK=$mask"
+    echo "PKGS_ADD=$pkgs_add PKGS_DEL=$pkgs_del"
+    echo "HOOKS=$hooks ENV_VARS=$env_vars"
+    echo "STEPS=$steps CALLS=$calls"
+    echo "NOTE: CALLS may exceed STEPS — _progress calls outside"
+    echo "      do_install sub-functions (comments, test-all) are expected."
+
+    # 4. Options parity
+    echo "=== OPTIONS PARITY ==="
+    help_opts=$(sed -n '/^function show_help$/,/^end$/p' ry-install.fish | grep -oP '^\s+--[\w-]+' | sed 's/^[[:space:]]*//' | sort -u)
+    parser_modes=$(grep -oP 'case --[\w-]+' ry-install.fish | sed 's/case //' | sort -u)
+    dispatch_modes=$(sed -n '/^switch \$MODE$/,/^end$/p' ry-install.fish | grep -oP 'case [\w-]+' | sed 's/case //' | sort -u)
+    echo "Help options:"
+    echo "$help_opts" | tr '\n' ' '; echo
+    echo "Parser cases:"
+    echo "$parser_modes" | tr '\n' ' '; echo
+    echo "Dispatch modes:"
+    echo "$dispatch_modes" | tr '\n' ' '; echo
+    echo "Help-only (not in parser):"
+    comm -23 <(echo "$help_opts") <(echo "$parser_modes")
+    echo "Parser-only (not in help):"
+    comm -13 <(echo "$help_opts") <(echo "$parser_modes")
+
+    # 5. Safety checks
+    echo "=== SAFETY ==="
+    echo -n "rm -rf total: "
+    grep -c 'rm -rf' ry-install.fish
+    echo "rm -rf without --preserve-root or safe scope:"
+    grep -n 'rm -rf' ry-install.fish | grep -v 'preserve-root\|^\s*#\|LOCK_DIR' | head -5
+    echo -n "Unquoted numeric tests: "
+    grep -cP 'test \$\w+ -(?:gt|lt|ge|le|eq|ne) ' ry-install.fish
+    echo -n "echo with variable pipe: "
+    grep -cP 'echo "\$\w+" \|' ry-install.fish
+
+    # 6. Format audit — inspect get_file_content case blocks directly
+    echo "=== FORMAT AUDIT ==="
+    echo "Extracting get_file_content for manual inspection..."
+    sed -n '/^function get_file_content$/,/^end$/p' ry-install.fish
+
+Validate each config's output against the Format-Specific Checks table
+by inspecting the printf/echo blocks inside each get_file_content case
+statement.
+
+
+Phase 4 — Report (verification-before-completion skill)
+
+Before writing the report, re-read your findings.txt and checklist.txt.
+Verify every finding has a line number. No claim without evidence.
+No "should be fine."
+
+Report format: Plain text (.txt), kernel.org changelog style. Save to
+/mnt/user-data/outputs/ry-install-audit-YYYYMMDD.txt. Use present_files
+to deliver.
+
+    ry-install v<VERSION> — Full Audit Report
+
+    Date: YYYY-MM-DD
+    Scope: files audited, line counts
+    Checklist: N items evaluated
+    Verdict: PASS / PASS WITH FINDINGS / FAIL
+    (FAIL = any CRITICAL or HIGH finding)
+
+
+    CROSS-REFERENCE VERIFICATION
+
+      <item>: <expected> = <actual>  ✓/✗
+      ...
+
+
+    ANTI-PATTERN SCAN
+
+      <pattern>: <count>  ✓/✗
+      ...
+
+
+    OPTIONS PARITY
+
+      Help flags: <count>
+      Parser cases: <count>
+      Dispatch modes: <count>
+      Functions defined: <count>
+      Mismatches: <list or "none">
+
+
+    FINDINGS
+
+      <SEV>-<NN>  <one-line title>
+      Location: ~line <N>, <function>
+      <what, why it matters, evidence>
+      Severity: <level> (<category>)
+
+      Suggested fix:
+        <concrete code change>
+
+
+    CHECKLIST RESULTS
+
+      <item> ........... PASS/FAIL/WARN  <brief evidence>
+      ...
+
+
+    SECONDARY AUDIT
+
+      Data flow:        PASS/FAIL  <evidence>
+      README claims:    PASS/FAIL  <mismatches if any>
+      Completions:      PASS/FAIL  <evidence>
+      Lint coverage:    PASS/INFO  <missing checks if any>
+      Verify coverage:  PASS/INFO  <gaps if any>
+      Edge cases:       PASS/FAIL  <evidence>
+
+
+    FORMAT AUDIT
+
+      <format>: PASS/FAIL  <evidence>
+      ...
+
+
+    SUMMARY
+
+      Files audited:    N
+      Lines audited:    N
+      Findings:         N CRITICAL, N HIGH, N MEDIUM, N LOW, N INFO
+      Cross-refs:       N/N verified
+      Anti-patterns:    N found
+      Options parity:   MATCH/MISMATCH
+      Checklist:        N/N PASS
+      Secondary audit:  N/N PASS
+
+
+Execution Rules
+
+  1. Install fish first — Phase 0 step 1. Required for syntax checks.
+  2. Read skill files first — follow their methodology for analysis
+     format, state model structure, and verification requirements.
+  3. Targeted scans, not sequential reads — build the state model
+     from grep/awk pattern passes, not 500-line chunks. Only use
+     sed -n for specific line ranges when verifying findings.
+  4. Write findings incrementally — append to findings.txt as
+     discovered. Never hold >1 finding unsaved.
+  5. Batch tool calls — compound bash. Target 30-40 total calls.
+  6. Proportional depth — full analysis for security-critical functions,
+     brief for trivial wrappers (see Phase 1 depth guide).
+  7. No narration — no "Let me now check..." / "Moving on to...". Work
+     silently. Conclusions first.
+  8. Cross-refs are automated — run the Phase 3 bash block, don't count
+     manually. The awk patterns handle backslash-continuation arrays.
+  9. README in scope — cross-reference claims against script reality.
+ 10. Known design choices are not findings — header comments (lines 1-22)
+     document intentional tradeoffs. Don't re-litigate them. Only flag
+     if implementation contradicts the stated intent.
+ 11. Severity calibration:
+       CRITICAL: data loss, boot failure, credential leak, privilege
+                 escalation
+       HIGH:     silent failure in install path, missing DRY guard on
+                 destructive op
+       MEDIUM:   functional edge-case, incomplete validation, count
+                 mismatch, lint gap
+       LOW:      minor performance, cosmetic, unlikely edge-case with
+                 existing mitigation
+       INFO:     intentional behavior that superficially resembles a
+                 gap, design note, no action needed
+ 12. Resume after compaction — if context is compacted mid-audit, read
+     progress.txt, findings.txt, and state-model.txt from
+     /home/claude/ry-audit/ to recover state. Resume from last
+     incomplete phase. Never restart completed phases.
+ 13. Process substitution — the Phase 3 bash block uses <() syntax
+     which requires bash. Run via: bash -c '...' or ensure the
+     compound command runs under bash, not dash/sh.
+ 14. Format audit method — inspect printf/echo blocks inside each
+     get_file_content case statement directly. Do not attempt to
+     source the script into a fish harness — it has side effects
+     that prevent sourcing.
+
+@@AUDIT@@ — this marker triggers the audit. Begin.
