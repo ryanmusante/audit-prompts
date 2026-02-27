@@ -1,344 +1,191 @@
 FISH SHELL SCRIPT AUDIT PROMPT
 ===============================
-Version: 6.0.0
-Derived from: ry-install.fish v2.8.3 audit (2026-02-26)
-Changed: 6.0.0 Sync with ry-install v2.8.1→v2.8.3:
-               flock/exec fd REMOVED (mkdir-only lock); --profile flag;
-               NVME_LIFE_WARN constant; ANSI clear-screen NO_COLOR guard;
-               checks 218/324 → regression guards. 325 checks (was 324).
-         (Full history: 3.3.0→5.0.1 in git)
-Checks: 325
+Version: 7.1.0
+Derived from: ry-install.fish v3.0.0 audit (2026-02-27)
+Changed: 7.1.0 Sync v2.8.9→v3.0.0: fish_indent canonical formatting;
+               README structured tables; changelog kernel.org style.
+         7.0.0 Sync v2.8.3→v2.8.9: isatty 1 guard in do_watch (v2.8.4);
+               comment/README trimming (v2.8.5-v2.8.9); 326 checks (was 325).
+               Rewrite: consolidate passes, trim setup/explanations (~55% smaller).
+         (Full history: 3.3.0→6.0.0 in git)
+Checks: 326
 Phases: 13 (11 static + 1 runtime + 1 gap analysis)
+
 PURPOSE
 -------
-Comprehensive audit checklist for production fish shell scripts.
-325 checks across 13 phases covering embedded content, style,
-architecture, runtime execution, and gap analysis. Designed for
-scripts that manage system configuration, use sudo, handle
-credentials, generate config files, and run multi-mode dispatch
-with backup and verification subsystems.
+326-check audit for production fish scripts managing system config,
+sudo, credentials, embedded configs, and multi-mode dispatch with
+backup/verification subsystems.
 
-ZERO-SKIP MANDATE: Every line of source analyzed. No sampling,
-no summarization of "similar" blocks. Parallel process across max
-cores using fish shell and Rust tooling (rg, fd, sd, bat, tokei).
-Trace all code paths including error branches, edge cases,
-unreachable code, early returns, fall-throughs, and implicit
-control flow.
+ZERO-SKIP: Every source line analyzed. No sampling. Trace all code
+paths including error branches, unreachable code, early returns.
 
-KEY LESSONS (encoded as checks — see phases for details):
-  - Static analysis alone misses execution-order bugs → Phase 12
-  - Fish redirects resolve BEFORE command runs → check 242, Phase 9
-  - Pre-lock arg validation: validate → lock → execute → check 230
-  - flock/exec fd REMOVED v2.8.2; mkdir-only lock → checks 218, 324
-  - Dispatch args must be quoted → check 231
-  - Named constants for all thresholds → checks 247-258
-  - check_deps must match actual usage → check 272
-  - --watch --once tty gate relaxation → checks 314-316
-  - --profile [PROFILE] stderr, NO_COLOR respect → check 325
-  - ANSI clear-screen guard in do_watch → check 304
-USAGE
------
-Provide this prompt along with the script to audit. Work through all
-phases without stopping. Record PASS/FAIL/INFO per check. After the
-audit, produce a spec file for all fixes.
+KEY LESSONS (encoded as checks):
+  - Static analysis misses execution-order bugs → Phase 12
+  - Fish redirects resolve BEFORE command runs → 242
+  - Pre-lock validation: validate → lock → execute → 230
+  - mkdir-only lock (no flock/exec fd since v2.8.2) → 218, 324
+  - Dispatch args quoted → 231
+  - Named constants for all thresholds → 247-258
+  - check_deps matches actual usage → 272
+  - --watch --once tty gate relaxation → 314-316
+  - --profile stderr + NO_COLOR → 325
+  - do_watch isatty 1 color guard (v2.8.4) → 326
+
 ───────────────────────────────────────────────────────────────
- ENVIRONMENT SETUP (run before any audit work)
+ SETUP
 ───────────────────────────────────────────────────────────────
 
-STEP 0: COPY SCRIPT TO CONTAINER
+STEP 0: COPY + TOOLS
 
-     ```bash
-     mkdir -p /home/claude/audit-src
-     cp /mnt/user-data/uploads/<file> /home/claude/audit-src/
-     wc -l /home/claude/audit-src/script.fish
-     command -v tokei >/dev/null 2>&1 && tokei /home/claude/audit-src/script.fish
-     ```
-STEP 1: INSTALL ALL TOOLS (single command)
+  ```bash
+  mkdir -p /home/claude/audit-{src,data}
+  cp /mnt/user-data/uploads/<file> /home/claude/audit-src/script.fish
+  wc -l /home/claude/audit-src/script.fish
 
-     Fish is the authoritative interpreter. Rust CLI tools replace
-     coreutils for all file inspection. Install everything in one pass.
+  apt-get update -q 2>/dev/null && \
+    apt-get install -y fish ripgrep fd-find bat 2>/dev/null; true
+  for pair in "fdfind fd" "batcat bat"; do
+    set -- $pair; src="$1" dst="$2"
+    if command -v "$src" >/dev/null 2>&1 && ! command -v "$dst" >/dev/null 2>&1; then
+      ln -sf "$(command -v "$src")" "/usr/local/bin/$dst"
+    fi
+  done
+  for t in fish rg fd bat; do
+    command -v "$t" >/dev/null 2>&1 && echo "$t: OK" || echo "$t: missing"
+  done
+  ```
 
-     ```bash
-     # Attempt install; continue even if package manager unavailable
-     apt-get update -q 2>/dev/null && \
-       apt-get install -y fish ripgrep fd-find bat 2>/dev/null; true
+  Fallbacks (if tools unavailable):
+  ```bash
+  command -v rg  >/dev/null 2>&1 || rg()  { grep -P --color=never "$@"; }
+  command -v bat >/dev/null 2>&1 || bat() {
+    local args=() range=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in --plain) shift ;; -r) shift; range="$1"; shift ;; *) args+=("$1"); shift ;; esac
+    done
+    if [[ -n "$range" ]]; then sed -n "${range%%:*},${range##*:}p" "${args[-1]}"; else cat "${args[@]}"; fi
+  }
+  command -v fd  >/dev/null 2>&1 || fd() { local pat="$1"; shift; find "$@" -name "$pat" 2>/dev/null; }
+  command -v sd  >/dev/null 2>&1 || sd() { sed -i "s/$1/$2/g" "${@:3}"; }
+  export -f rg bat fd sd 2>/dev/null; true
+  ```
 
-     # fdfind → fd, batcat → bat (Debian/Ubuntu package names)
-     for pair in "fdfind fd" "batcat bat"; do
-       set -- $pair
-       src="$1" dst="$2"
-       if command -v "$src" >/dev/null 2>&1 && ! command -v "$dst" >/dev/null 2>&1; then
-         ln -sf "$(command -v "$src")" "/usr/local/bin/$dst"
-       fi
-     done
+FISH SYNTAX (auditor reference):
+  $var (not ${var}) · (command) (not $(command)) · test/string (not [[]])
+  set -gx (not export) · ; and / ; or (not &&/||) · set --erase (not set -e)
+  for x in $ARRAY unquoted · "text"(cmd) is valid concat · -- before args
+  read -P "prompt: " var · read -sP for hidden input
+  REDIRECT BUG: < nonexistent 2>/dev/null leaks warnings → use cat -- 2>/dev/null
 
-     # Verify what's available
-     for t in fish rg fd bat eza sd tokei; do
-       command -v "$t" >/dev/null 2>&1 && echo "$t: OK" || echo "$t: missing (fallback active)"
-     done
-     ```
-
-     If package install fails, define fallback wrappers so all code
-     blocks work unchanged. Run this block ONCE before any audit work:
-
-     ```bash
-     # TOOL FALLBACK — define wrappers for missing tools
-     command -v rg  >/dev/null 2>&1 || rg()  { grep -P --color=never "$@"; }
-     command -v bat >/dev/null 2>&1 || bat() {
-       local args=() range=""
-       while [[ $# -gt 0 ]]; do
-         case "$1" in --plain) shift ;; -r) shift; range="$1"; shift ;; *) args+=("$1"); shift ;; esac
-       done
-       if [[ -n "$range" ]]; then sed -n "${range%%:*},${range##*:}p" "${args[-1]}"; else cat "${args[@]}"; fi
-     }
-     command -v eza >/dev/null 2>&1 || eza() { ls "$@"; }
-     command -v fd  >/dev/null 2>&1 || fd()  { local pat="$1"; shift; find "$@" -name "$pat" 2>/dev/null; }
-     command -v sd  >/dev/null 2>&1 || sd()  { sed -i "s/$1/$2/g" "${@:3}"; }
-     export -f rg bat eza fd sd 2>/dev/null; true
-     ```
-
-     FISH USAGE:
-       fish --no-execute script.fish    # syntax validation
-       fish -c 'string match ...'       # pattern checks
-       fish -c 'set arr a b; for x in $arr; echo $x; end'  # behavior tests
-
-     CRITICAL FISH SYNTAX REFERENCE (for the auditor):
-       Variable expansion:   $var (NEVER ${var})
-       Command substitution: (command) (NEVER $(command))
-       Conditionals:         test / string match (NEVER [[ ]])
-       Export:               set -gx VAR val (NEVER export)
-       Boolean logic:        cmd1; and cmd2 / cmd1; or cmd2 (NEVER &&/||)
-       Erase variable:       set --erase VAR (NEVER set -e VAR, unset)
-       For-loop arrays:      for x in $ARRAY (UNQUOTED — correct idiom)
-                             for x in "$ARRAY" (WRONG — joins to one string)
-       String concat:        "text"(command) is valid (string concatenation)
-       End-of-options:       -- before arguments in string/test/commands
-       Read input:           read -P "prompt: " var (NOT read -p)
-       Read silent:          read -sP "prompt: " var (hidden input)
-
-     FISH REDIRECT BUG: see check 242. Fish resolves redirects before
-       command runs; `< nonexistent 2>/dev/null` leaks warnings.
-
-     For large files (>500 lines), use rg with targeted patterns.
-     Max 3 reads per file per pass.
 CONFIG SYNTAX: see userPreferences [AUDIT] section
-CROSS-REFERENCE PAIRS: see userPreferences [AUDIT] cross_refs
+CROSS-REFS: see userPreferences [AUDIT] cross_refs
 
 ───────────────────────────────────────────────────────────────
- EXECUTION STRATEGY
+ EXECUTION
 ───────────────────────────────────────────────────────────────
 
-EXECUTION RULES (apply to ALL passes):
-  - Work continuously. Never ask "should I continue?" — always continue.
-  - Batch tool calls. Parallel (&) when independent.
-  - >60 lines output → write to file first, then analyze.
-  - >3 tool calls with no findings written → flush to file now.
-  - If blocked on one check → skip, mark DEFERRED, continue.
-  - Save progress after EVERY pass to audit-findings.txt.
-  - Max 3 retries per tool call. If stuck → log failure, continue.
-  - Never re-read the same file region twice per pass.
-  - >10 items in a phase → split into sub-chunks of 5.
-  - Write findings as discovered:
-    echo "F-N ..." >> /home/claude/audit-findings.txt
-EXECUTION ORDER (7 passes):
+RULES: Work continuously. Batch tool calls. Parallel when independent.
+  >60 lines output → file first. >3 calls with no findings → flush.
+  Blocked → DEFERRED, continue. Save after EVERY pass. Max 3 retries.
+  Never re-read same region twice. >10 items → sub-chunks of 5.
+  Write findings: echo "F-N ..." >> /home/claude/audit-findings.txt
 
-  PASS 1 — DATA GATHERING   phases 1-5   (single compound command)
-  PASS 2 — STATIC ANALYSIS  phases 1-5   (syntax, routing, errors, vars, security)
-  PASS 3 — CONTENT ANALYSIS phases 6-7   (embedded configs, cross-refs)
-  PASS 4 — ARCHITECTURE     phases 8-11  (functions, patterns, docs, testing)
-  PASS 5 — RUNTIME          phase 12     (fish execution tests)
-  PASS 6 — GAP ANALYSIS     phase 13     (race conditions, error paths, edges)
-  PASS 7 — FINALIZE         —            (summary table + spec file + zip)
-PASS 1: PARALLEL DATA GATHERING (phases 1-5)
+ORDER:
+  PASS 1 — DATA GATHER    phases 1-11  (compound parallel commands)
+  PASS 2 — STATIC         phases 1-11  (analyze gathered data)
+  PASS 3 — RUNTIME        phase 12     (fish execution tests)
+  PASS 4 — GAP ANALYSIS   phase 13     (race/error/edge tracing)
+  PASS 5 — FINALIZE       —            (summary + spec + zip)
 
-  Run ONE compound command. All 5 extractions in parallel subshells.
+PASS 1: DATA GATHERING (single compound block)
 
   ```bash
   F=/home/claude/audit-src/script.fish
   D=/home/claude/audit-data
   mkdir -p "$D"
 
+  # P1-5: syntax, routing, errors, vars, security
   (
-    echo "=== P1: BASHISMS ==="
+    echo "=== BASHISMS ==="
     rg -n '\$\(|export |&&|\|\||set -e |\$\{|functions -e|unset |local ' "$F"
-    echo "=== P1: STRING OPS ==="
+    echo "=== STRING OPS ==="
     rg -n 'string (match|replace|split|join|trim)' "$F" | rg -v -- '--'
-    echo "=== P1: ARGPARSE ==="
-    rg -n 'argparse|argv' "$F"
-  ) > "$D/phase1-raw.txt" 2>&1 &
+    echo "=== ARGPARSE ===" && rg -n 'argparse|argv' "$F"
+    echo "=== ROUTING ===" && rg -n '>&2|>/dev/null|stderr|stdout' "$F"
+    echo "=== NO_COLOR ===" && rg -n 'NO_COLOR|isatty|tput|test -t' "$F"
+    echo "=== EXIT/RETURN ===" && rg -n 'exit [0-9]|return [0-9]|exit$' "$F"
+    echo "=== STATUS ===" && rg -n '\$status|\$pipestatus' "$F"
+    echo "=== SIGNALS ===" && rg -n 'trap|--on-signal|--on-event|fish_exit' "$F"
+    echo "=== CLEANUP ===" && rg -n 'mktemp|rm -f|rm -rf|cleanup|_do_cleanup' "$F"
+    echo "=== SCOPE ===" && rg -n 'set -[glx]|set --erase|set --global|set --local' "$F"
+    echo "=== FOR LOOPS ===" && rg -n 'for .* in ' "$F"
+    echo "=== INJECTION ===" && rg -n 'eval|source ' "$F"
+    echo "=== CREDS ===" && rg -ni 'password|passphrase|credential|secret|WIFI_PASS' "$F"
+    echo "=== PERMS ===" && rg -n 'chmod|chown|0600|0644|0700|0755' "$F"
+    echo "=== SUDO ===" && rg -n 'sudo |_IS_ROOT' "$F"
+    echo "=== EXT CMDS ===" && rg -n 'command -q|command -v' "$F"
+  ) > "$D/p1-5.txt" 2>&1 &
 
+  # P6-7: embedded configs, cross-refs
   (
-    echo "=== P2: ROUTING ==="
-    rg -n '>&2|>/dev/null|stderr|stdout|1>/dev|2>/dev' "$F"
-    echo "=== P2: MSG FUNC ==="
-    rg -n 'NO_COLOR|isatty|tput|test -t' "$F"
-  ) > "$D/phase2-raw.txt" 2>&1 &
+    echo "=== CONFIG FORMATS ===" && rg -n '\\[Unit\\]|\\[Service\\]|\\[Install\\]' "$F"
+    echo "=== SYSTEMD ===" && rg -n 'ExecStart|After=|Type=' "$F"
+    echo "=== UDEV ===" && rg -n 'ACTION==|SUBSYSTEM==|ATTR{' "$F"
+    echo "=== DESTINATIONS ===" && rg -n 'SERVICE_DESTINATIONS|amdgpu-performance|cpupower-epp' "$F"
+    echo "=== SDBOOT ===" && rg -n 'LINUX_FALLBACK_OPTIONS|SDBOOT' "$F"
+    echo "=== VERSION ===" && rg -n 'VERSION|SYSTEM_DEST|USER_DEST|SERVICE_DEST|get_file_content|MASK' "$F"
+    echo "=== DISPATCH ===" && rg -n 'do_\w+ \$\|do_\w+ "\$' "$F" | rg -v 'function |#|_log'
+    echo "=== WATCH ===" && rg -n 'WATCH_INTERVAL|WATCH_ONCE|do_watch|--watch|--once' "$F"
+    echo "=== PROFILE ===" && rg -n 'PROFILE|profile' "$F"
+  ) > "$D/p6-7.txt" 2>&1 &
 
+  # P8-11: architecture, patterns, docs, testing
   (
-    echo "=== P3: EXIT/RETURN ==="
-    rg -n 'exit [0-9]|return [0-9]|exit$' "$F"
-    echo "=== P3: STATUS ==="
-    rg -n '\$status|\$pipestatus' "$F"
-    echo "=== P3: SIGNALS ==="
-    rg -n 'trap|SIGINT|SIGTERM|SIGHUP|fish_exit|--on-signal|--on-event' "$F"
-    echo "=== P3: CLEANUP ==="
-    rg -n 'mktemp|rm -f|rm -rf|cleanup|_do_cleanup' "$F"
-  ) > "$D/phase3-raw.txt" 2>&1 &
-
-  (
-    echo "=== P4: SCOPE ==="
-    rg -n 'set -[glx]|set --erase|set --global|set --local|set --export' "$F"
-    echo "=== P4: FOR LOOPS ==="
-    rg -n 'for .* in ' "$F"
-    echo "=== P4: NAMING ==="
-    rg -n 'set -l [a-z] ' "$F" | rg -v 'set -l [a-z][a-z]'
-  ) > "$D/phase4-raw.txt" 2>&1 &
-
-  (
-    echo "=== P5: INJECTION ==="
-    rg -n 'eval|source ' "$F"
-    echo "=== P5: TMPFILES ==="
-    rg -n 'mktemp|/tmp/' "$F"
-    echo "=== P5: CREDS ==="
-    rg -ni 'password|passphrase|credential|secret|token|WIFI_PASS' "$F"
-    echo "=== P5: PERMS ==="
-    rg -n 'chmod|chown|0600|0644|0700|0755' "$F"
-    echo "=== P5: SUDO ==="
-    rg -n 'sudo |as root|is_root|_IS_ROOT' "$F"
-    echo "=== P5: EXT CMDS ==="
-    rg -n 'command -q|command -v|which ' "$F"
-  ) > "$D/phase5-raw.txt" 2>&1 &
+    echo "=== FUNCTIONS ===" && rg -n '^function |^end$' "$F"
+    echo "=== ARITY ===" && rg -n 'count \$argv|test .* -ne |test .* -lt ' "$F"
+    echo "=== ATOMIC ===" && rg -n 'mv |install_file|chmod.*mv' "$F"
+    echo "=== LOCK ===" && rg -n 'mkdir.*lock|rmdir.*lock|kill -0|LOCK|flock|exec 9' "$F"
+    echo "=== LOG ===" && rg -n '_log|_json_str|NDJSON|log_file|\.jsonl' "$F"
+    echo "=== BACKUP ===" && rg -n '_backup_|BACKUP_BASE|BACKUP_DIR|MAX_BACKUPS' "$F"
+    echo "=== ARGPARSE TMP ===" && rg -n 'ry-argparse|_argparse_tmp' "$F"
+    echo "=== ANTIPATTERNS ===" && rg -n 'cat .* \| |test .* = ""|head -1|tail -1' "$F"
+    echo "=== REDIRECT BUG ===" && rg -n 'string trim.*<|string match.*<' "$F" | rg -v '#'
+    echo "=== MAGIC NUMS ===" && rg -n 'TEMP_|DISK_|BOOT_|MAX_|CACHE_|ROOT_AVAIL|NVME_LIFE|WATCH_INTERVAL' "$F"
+    echo "=== DRY ===" && rg -n 'DRY|dry.run|--dry-run|\[DRY\]' "$F"
+    echo "=== TEST_ALL ===" && rg -n 'do_test_all|verify.static|verify.runtime' "$F"
+    echo "=== ISATTY ===" && rg -n 'isatty|test -t' "$F"
+    echo "=== ROLLBACK ===" && rg -n 'rollback|undo|revert|restore|_backup' "$F"
+    echo "=== PRE-LOCK ===" && rg -n 'case install-file|case install|_acquire_lock' "$F"
+  ) > "$D/p8-11.txt" 2>&1 &
 
   wait
-  echo "--- Pass 1 complete ---"
   wc -l "$D"/*.txt
   ```
-PASS 3: PARALLEL DATA GATHERING (phases 6-7)
 
-  ```bash
-  F=/home/claude/audit-src/script.fish
-  D=/home/claude/audit-data
-
-  (
-    echo "=== P6: CONFIG FORMATS ==="
-    rg -n '^\[|printf.*\[|\\[Unit\\]|\\[Service\\]|\\[Install\\]' "$F"
-    echo "=== P6: SYSTEMD ==="
-    rg -n 'ExecStart|After=|Type=' "$F"
-    echo "=== P6: UDEV ==="
-    rg -n 'ACTION==|SUBSYSTEM==|ATTR{' "$F"
-    echo "=== P6: SERVICE_DESTINATIONS ==="
-    rg -n 'SERVICE_DESTINATIONS|amdgpu-performance|cpupower-epp' "$F"
-    echo "=== P6: SDBOOT FALLBACK ==="
-    rg -n 'LINUX_FALLBACK_OPTIONS|SDBOOT' "$F"
-  ) > "$D/phase6-raw.txt" 2>&1 &
-
-  (
-    echo "=== P7: VERSION ==="
-    rg -n 'VERSION|SYSTEM_DESTINATIONS|USER_DESTINATIONS|SERVICE_DESTINATIONS|get_file_content|PROGRESS|MASK' "$F"
-    echo "=== P7: README ==="
-    rg -n 'help|version|exit' "$F" | head -50
-    echo "=== P7: DIFF_TARGET ==="
-    rg -n 'DIFF_TARGET|diff.*target|--diff.*path' "$F"
-    echo "=== P7: WATCH ==="
-    rg -n 'WATCH_INTERVAL|WATCH_ONCE|do_watch|--watch|--interval|--once' "$F"
-    echo "=== P7: NO_LOG ==="
-    rg -n 'no.log|NO_LOG|/dev/null.*LOG' "$F"
-    echo "=== P7: DISPATCH QUOTING ==="
-    rg -n 'do_diff |do_logs |do_install_file |do_watch |do_clean ' "$F" | rg -v 'function |#'
-  ) > "$D/phase7-raw.txt" 2>&1 &
-
-  wait
-  wc -l "$D"/phase{6,7}-raw.txt
-  ```
-PASS 4: PARALLEL DATA GATHERING (phases 8-11)
-
-  ```bash
-  F=/home/claude/audit-src/script.fish
-  D=/home/claude/audit-data
-
-  (
-    echo "=== P8: FUNCTIONS ==="
-    rg -n '^function |^end$' "$F"
-    echo "=== P8: ARITY ==="
-    rg -n 'count \$argv|test .* -ne |test .* -lt ' "$F"
-    echo "=== P8: ATOMIC ==="
-    rg -n 'mv |install_file|chmod.*mv|symlink' "$F"
-    echo "=== P8: LOCK ==="
-    rg -n 'mkdir.*lock|rmdir.*lock|kill -0|LOCK|flock|exec 9|_LOCK_METHOD' "$F"
-    echo "=== P8: LOG ==="
-    rg -n '_log|_json_str|NDJSON|log_file|\.jsonl' "$F"
-    echo "=== P8: BACKUP ==="
-    rg -n '_backup_|BACKUP_BASE|BACKUP_DIR|MAX_BACKUPS' "$F"
-    echo "=== P8: INSTALL_FILES ==="
-    rg -n 'install_files|_argparse_tmp|ry-argparse' "$F"
-    echo "=== P8: EXT CMD AUDIT ==="
-    rg -oP '(?:sudo\s+|command\s+)?\b[a-z][\w-]+' "$F" | sort -u
-    echo "=== P8: PRE-LOCK VALIDATION ==="
-    rg -n 'case install-file|case install|_acquire_lock' "$F"
-    echo "=== P8: DISPATCH ARGS ==="
-    rg -n 'do_\w+ \$\|do_\w+ "\$' "$F" | rg -v 'function |#|_log'
-  ) > "$D/phase8-raw.txt" 2>&1 &
-
-  (
-    echo "=== P9: ANTIPATTERNS ==="
-    rg -n 'cat .* \| |grep -q.*\||test .* = ""|head -1|tail -1' "$F"
-    echo "=== P9: REDIRECT ANTIPATTERN ==="
-    rg -n 'string trim.*<|string match.*<|string replace.*<' "$F" | rg -v '#'
-    echo "=== P9: FALSE POS ==="
-    rg -n '".*"(' "$F"
-    echo "=== P10: MAGIC ==="
-    rg -n '[0-9]{3,}' "$F" | rg -v 'line|version|#|echo|printf'
-    echo "=== P10: THRESHOLDS ==="
-    rg -n 'TEMP_|DISK_|BOOT_|MAX_LOGS|MAX_BACKUPS|CACHE_CLEAN|BOOT_TIME|WATCH_INTERVAL|ROOT_AVAIL|NVME_LIFE' "$F"
-    echo "=== P10: HARDCODED NUMBERS ==="
-    rg -n 'test "\$.*" -lt [0-9]|test "\$.*" -gt [0-9]' "$F" | rg -v '_CRIT\|_WARN\|_MAX\|BOOT_SPACE'
-    echo "=== P11: PREFLIGHT ==="
-    rg -n 'command -q|disk.space|network|fingerprint|kernel.*version' "$F"
-    echo "=== P11: DEP LIST ==="
-    rg -n 'for cmd in' "$F" | head -5
-    echo "=== P11: DRY ==="
-    rg -n 'DRY|dry.run|--dry-run|\[DRY\]' "$F"
-    echo "=== P11: TEST_ALL ==="
-    rg -n 'do_test_all|verify.static|verify.runtime|--test-all|--verify' "$F"
-    echo "=== P11: WATCH_TTY ==="
-    rg -n 'isatty|test -t|tty|WATCH_ONCE' "$F"
-    echo "=== P11: ROLLBACK ==="
-    rg -n 'rollback|undo|revert|restore|_backup' "$F"
-    echo "=== P11: PROFILE ==="
-    rg -n 'PROFILE|profile' "$F"
-  ) > "$D/phase9-11-raw.txt" 2>&1 &
-
-  wait
-  wc -l "$D"/phase{8,9-11}-raw.txt
-  ```
-PASS 5: RUNTIME TEST HARNESS (phase 12)
-
-  All tests write to files. Analyze AFTER all tests complete.
+PASS 3: RUNTIME (phase 12)
 
   ```bash
   S=/home/claude/audit-src/script.fish
   D=/home/claude/audit-data/runtime
   mkdir -p "$D"
 
-  # --- stdout/stderr separation (parallel) ---
+  # stdout/stderr separation
   fish "$S" --help    >"$D/help-out.txt"  2>"$D/help-err.txt"  &
   fish "$S" -h        >"$D/h-out.txt"     2>"$D/h-err.txt"     &
   fish "$S" --version >"$D/ver-out.txt"   2>"$D/ver-err.txt"   &
   fish "$S" -v        >"$D/v-out.txt"     2>"$D/v-err.txt"     &
   wait
 
-  # --- exit code matrix (sequential, fast) ---
+  # exit code matrix
   for mode in \
-    "--help" "-h" "--version" "-v" \
-    "--bogus" "--fix" "--stress" "--json" \
-    "--diff --lint" "--interval" "--interval abc" "--interval 0" \
-    "--interval -5" "--once" \
-    "--verify-static" "--verify-runtime" "--lint" "--test-all" \
+    "--help" "-h" "--version" "-v" "--bogus" "--fix" "--stress" "--json" \
+    "--diff --lint" "--interval" "--interval abc" "--interval 0" "--interval -5" \
+    "--once" "--verify-static" "--verify-runtime" "--lint" "--test-all" \
     "--clean --dry-run" "--completions" "--diff" "--diagnose" \
     "--install-file" "--install-file /etc/kernel/cmdline --dry-run" \
     "--logs" "--logs list" "--logs system" "--logs analyze" \
-    "--diagnose --json" "--json" \
-    "--watch" "--watch --once" \
+    "--diagnose --json" "--json" "--watch" "--watch --once" \
     "--no-log --version" "--no-log --lint" \
     "--diff /etc/kernel/cmdline" "--diff relative/path" \
     "--profile --dry-run"; do
@@ -346,849 +193,546 @@ PASS 5: RUNTIME TEST HARNESS (phase 12)
     printf '%s → %d\n' "$mode" "$?" >> "$D/exit-codes.txt"
   done
 
-  # --- --profile: timing output on stderr ---
+  # --profile timing
   fish "$S" --dry-run --profile --no-color >"$D/profile-out.txt" 2>"$D/profile-err.txt"
-  printf '--profile → %d\n' "$?" >> "$D/exit-codes.txt"
   fish "$S" --dry-run --no-color >"$D/noprofile-out.txt" 2>"$D/noprofile-err.txt"
 
-  # --- --watch --once: non-tty single snapshot (piped stdin) ---
+  # --watch --once non-tty
   echo "" | fish "$S" --watch --once >"$D/once-notty-out.txt" 2>"$D/once-notty-err.txt"
   printf '--watch --once non-tty → %d\n' "$?" >> "$D/exit-codes.txt"
 
-  # --- --watch non-tty without --once (expect exit 1) ---
+  # --watch non-tty without --once (expect exit 1)
   echo "" | fish "$S" --watch >"$D/watch-notty-out.txt" 2>"$D/watch-notty-err.txt"
   printf '--watch non-tty → %d\n' "$?" >> "$D/exit-codes.txt"
 
-  # --- NO_COLOR (parallel per mode) ---
+  # NO_COLOR enforcement
   for mode in "--lint" "--diff" "--dry-run" "--diagnose" "--logs list"; do
     NO_COLOR=1 fish "$S" $mode --no-color 2>"$D/nocolor-$mode.txt" >/dev/null &
   done
   wait
 
-  # --- DRY-RUN filesystem safety ---
+  # DRY-RUN filesystem safety
   stat -c '%n %Y' /etc/modprobe.d/* 2>/dev/null | sort > "$D/pre-dry.txt"
   fish "$S" --dry-run >"$D/dry-out.txt" 2>"$D/dry-err.txt"
   stat -c '%n %Y' /etc/modprobe.d/* 2>/dev/null | sort > "$D/post-dry.txt"
   diff "$D/pre-dry.txt" "$D/post-dry.txt" > "$D/dry-diff.txt"
 
-  # --- Internal lint ---
+  # Misc
   fish "$S" --lint >"$D/lint-out.txt" 2>"$D/lint-err.txt"
-
-  # --- --no-log: verify no log file created ---
   fish "$S" --no-log --version >"$D/nolog-out.txt" 2>"$D/nolog-err.txt"
   rg 'Log file:' "$D/nolog-err.txt" > "$D/nolog-check.txt" 2>/dev/null
 
-  # --- Fish redirect regression test (missing file stderr) ---
+  # Fish redirect regression
   fish -c '
-    # Simulate reading a missing sysfs file — must produce 0 stderr bytes
     set result (string trim -- (cat -- /nonexistent/path 2>/dev/null))
     echo "result: [$result]"
   ' >"$D/redirect-out.txt" 2>"$D/redirect-err.txt"
-  printf 'redirect-regression stderr bytes: %d\n' "$(wc -c < "$D/redirect-err.txt")" >> "$D/exit-codes.txt"
 
-  # --- Analyze results ---
-  echo "=== STDERR BYTE COUNTS (expect 0 for help/version) ==="
-  wc -c "$D"/{help,h,ver,v}-err.txt
-  echo "=== EXIT CODES ==="
-  bat --plain "$D/exit-codes.txt"
-  echo "=== ANSI ESCAPES (expect 0) ==="
-  rg -cP '\x1b\[' "$D"/nocolor-*.txt 2>/dev/null || echo "none"
-  echo "=== DRY-RUN FS CHANGES (expect empty) ==="
-  bat --plain "$D/dry-diff.txt"
-  echo "=== LINT ==="
-  bat --plain "$D/lint-err.txt"
-  echo "=== NO-LOG CHECK (expect empty) ==="
-  bat --plain "$D/nolog-check.txt"
-  echo "=== WATCH NON-TTY ==="
-  bat --plain "$D/watch-notty-err.txt"
-  echo "=== WATCH --ONCE NON-TTY ==="
-  wc -c "$D/once-notty-err.txt"
-  bat --plain "$D/once-notty-out.txt" | head -5
-  echo "=== REDIRECT REGRESSION ==="
-  bat --plain "$D/redirect-err.txt"
-  echo "=== PROFILE ==="
-  rg -c '\[PROFILE\]' "$D/profile-err.txt" 2>/dev/null || echo "0"
-  echo "=== NO PROFILE (expect 0) ==="
-  rg -c '\[PROFILE\]' "$D/noprofile-err.txt" 2>/dev/null || echo "0"
+  # Analyze
+  echo "=== STDERR BYTES (expect 0 for help/version) ===" && wc -c "$D"/{help,h,ver,v}-err.txt
+  echo "=== EXIT CODES ===" && bat --plain "$D/exit-codes.txt"
+  echo "=== ANSI (expect 0) ===" && rg -cP '\x1b\[' "$D"/nocolor-*.txt 2>/dev/null || echo "none"
+  echo "=== DRY-RUN FS (expect empty) ===" && bat --plain "$D/dry-diff.txt"
+  echo "=== LINT ===" && bat --plain "$D/lint-err.txt"
+  echo "=== NO-LOG (expect empty) ===" && bat --plain "$D/nolog-check.txt"
+  echo "=== WATCH NON-TTY ===" && bat --plain "$D/watch-notty-err.txt"
+  echo "=== WATCH --ONCE ===" && wc -c "$D/once-notty-err.txt" && bat --plain "$D/once-notty-out.txt" | head -5
+  echo "=== REDIRECT ===" && bat --plain "$D/redirect-err.txt"
+  echo "=== PROFILE ===" && rg -c '\[PROFILE\]' "$D/profile-err.txt" 2>/dev/null || echo "0"
+  echo "=== NO PROFILE (expect 0) ===" && rg -c '\[PROFILE\]' "$D/noprofile-err.txt" 2>/dev/null || echo "0"
   ```
-PASS 6: GAP ANALYSIS (phase 13)
+
+PASS 4: GAP ANALYSIS (phase 13)
 
   ```bash
   F=/home/claude/audit-src/script.fish
-  O=/home/claude/audit-findings.txt
+  D=/home/claude/audit-data
 
-  # For each function that uses mktemp, trace error paths:
+  # Tmpfile lifecycle per function
   for func in $(rg -oP '(?<=^function )\w+' "$F" | sort -u); do
     if rg -A 50 "^function $func" "$F" | rg -q 'mktemp'; then
-      echo "--- Tracing: $func ---"
+      echo "--- $func ---"
       rg -A 50 "^function $func" "$F" | rg 'mktemp|rm -f|return|set --erase'
     fi
-  done > /home/claude/audit-data/gap-tmpfile-trace.txt
+  done > "$D/gap-tmpfile.txt"
 
-  # DRY-RUN gate coverage:
-  rg -n 'sudo |pacman |systemctl |mv |tee ' "$F" \
-    | rg -v 'DRY|_run|#|echo|rg|string' \
-    > /home/claude/audit-data/gap-dry-gates.txt
+  # DRY-RUN gate coverage
+  rg -n 'sudo |pacman |systemctl |mv |tee ' "$F" | rg -v 'DRY|_run|#|echo|rg|string' > "$D/gap-dry.txt"
 
-  # Backup cleanup coverage:
-  rg -n '_backup_init|_backup_path|_backup_boot|_backup_system|BACKUP_DIR' "$F" \
-    > /home/claude/audit-data/gap-backup-trace.txt
+  # Lock regression (expect 0 flock hits)
+  rg -n 'flock|exec 9|_LOCK_METHOD.*flock' "$F" > "$D/gap-lock-regression.txt"
+  rg -n 'mkdir.*LOCK|rmdir.*LOCK|verify_pid' "$F" > "$D/gap-lock-trace.txt"
 
-  # install_files argparse temp lifecycle:
-  rg -n 'ry-argparse|_argparse_tmp' "$F" \
-    > /home/claude/audit-data/gap-argparse-trace.txt
+  # Argparse temp lifecycle
+  rg -n 'ry-argparse|_argparse_tmp' "$F" > "$D/gap-argparse.txt"
 
-  # Watch mode cleanup (including WATCH_ONCE lifecycle):
-  rg -n '_WATCH_COLS|WATCH_ONCE|set --erase.*WATCH' "$F" \
-    > /home/claude/audit-data/gap-watch-trace.txt
+  # Ext command coverage
+  rg -oP '(?:sudo\s+)?(?:command\s+)?\b(pacman|systemctl|mkinitcpio|modprobe|udevadm|systemd-analyze|journalctl|findmnt|lsblk|ip|tee|install|mkdir|chmod|chown|mv|cp|rm|cat|sort|wc|diff|date|sleep|kill|pkill|stat|head|tail|cut|tr|awk|sed|grep|find|mktemp|read)\b' "$F" | sort -u > "$D/gap-ext-cmds.txt"
+  rg -oP 'command -q\s+(\w+)' "$F" | sort -u > "$D/gap-cmd-checks.txt"
+  echo "=== Unchecked commands ===" && comm -23 "$D/gap-ext-cmds.txt" "$D/gap-cmd-checks.txt"
 
-  # Lock mechanism regression (mkdir-only, no flock/exec fd):
-  rg -n 'flock|exec 9|_LOCK_METHOD.*flock' "$F" \
-    > /home/claude/audit-data/gap-lock-regression.txt
-  rg -n 'mkdir.*LOCK|rmdir.*LOCK|find.*LOCK|verify_pid' "$F" \
-    > /home/claude/audit-data/gap-lock-trace.txt
-
-  # External command existence checks:
-  rg -oP '(?:sudo\s+)?(?:command\s+)?\b(pacman|systemctl|mkinitcpio|modprobe|udevadm|systemd-analyze|journalctl|findmnt|lsblk|ip|tee|install|mkdir|chmod|chown|mv|cp|rm|cat|sort|wc|diff|date|sleep|kill|pkill|stat|head|tail|cut|tr|awk|sed|grep|find|mktemp|read)\\b' "$F" \
-    | sort -u > /home/claude/audit-data/gap-ext-cmds.txt
-  # Cross-ref with command -q checks:
-  rg -oP 'command -q\s+(\w+)' "$F" | sort -u > /home/claude/audit-data/gap-cmd-checks.txt
-  echo "=== External commands NOT checked with command -q ==="
-  comm -23 /home/claude/audit-data/gap-ext-cmds.txt /home/claude/audit-data/gap-cmd-checks.txt
-
-  # Rollback path tracing:
-  rg -n 'sudo.*tee\|sudo.*mv\|sudo.*install\|sudo.*cp\|sudo.*rm' "$F" \
-    > /home/claude/audit-data/gap-rollback-trace.txt
-
-  # Dependency list accuracy (commands in check_deps vs actual usage):
-  rg -A 5 'for cmd in' "$F" | rg -oP '\b\w+\b' | sort -u > /home/claude/audit-data/gap-dep-list.txt
-  rg -oP '(?:command -q|command -v)\s+(\w+)' "$F" | awk '{print $NF}' | sort -u > /home/claude/audit-data/gap-dep-used.txt
-
-  wc -l /home/claude/audit-data/gap-*.txt
+  wc -l "$D"/gap-*.txt
   ```
-═══════════════════════════════════════════════════════════════
- PASS 2: STATIC ANALYSIS — Analyze Pass 1 data against
- Phases 1-5 below. Write findings as discovered.
-═══════════════════════════════════════════════════════════════
+
 ═══════════════════════════════════════════════════════════════
  PHASE 1: FISH SYNTAX & COMPLIANCE (20 checks)
 ═══════════════════════════════════════════════════════════════
 
-  Exempt: Hits in embedded content (ExecStart, awk, heredocs,
-  lint self-checkers) are NOT findings.
+  Exempt: Hits in embedded content (ExecStart, awk, heredocs, lint
+  self-checkers) are NOT findings.
 
-  1.1  BASHISM SCAN
-       [ ] 1.   $()           — must use (command) for fish substitution
-       [ ] 2.   [[ ]]         — must use test or string match
-       [ ] 3.   export        — must use set -gx
-       [ ] 4.   &&/||         — must use and/or (or ; and / ; or)
-       [ ] 5.   ${var}        — must use $var
-       [ ] 6.   set -e VAR    — deprecated; must use set --erase VAR
-       [ ] 7.   functions -e  — deprecated erase form
-       [ ] 8.   unset         — not a fish builtin
-       [ ] 9.   source        — fish uses source or . (verify correct usage)
-       [ ] 10.  local         — not fish; must use set -l
+  1.1  BASHISMS
+       [ ] 1. $()  [ ] 2. [[]]  [ ] 3. export  [ ] 4. &&/||
+       [ ] 5. ${var}  [ ] 6. set -e VAR  [ ] 7. functions -e
+       [ ] 8. unset  [ ] 9. source (verify correct usage)  [ ] 10. local
 
-  1.2  FISH VERSION GATE
-       [ ] 11.  Script checks fish version before executing
-       [ ] 12.  Minimum version matches features actually used
+  1.2  VERSION GATE
+       [ ] 11. Fish version checked before executing
+       [ ] 12. Minimum version matches features used
 
-  1.3  STRING OPERATIONS
-       [ ] 13.  string commands use -- separator before arguments
-       [ ] 14.  No external sed/awk/grep where string builtins suffice
-       [ ] 15.  string match uses -q for boolean tests (not captured output)
+  1.3  STRING OPS
+       [ ] 13. -- separator before arguments
+       [ ] 14. No sed/awk/grep where string builtins suffice
+       [ ] 15. string match uses -q for boolean tests
 
   1.4  OPTION PARSING
-       [ ] 16.  argparse used (not manual $argv parsing for options)
-       [ ] 17.  Unknown options produce error + usage message
-       [ ] 18.  -- (end-of-options) handled in argument parser
+       [ ] 16. argparse used  [ ] 17. Unknown opts → error + usage
+       [ ] 18. -- handled
 
   1.5  SYNTAX VALIDATION
-       [ ] 19.  fish --no-execute passes on entire script
-       [ ] 20.  No syntax errors in embedded fish content (conf.d scripts)
+       [ ] 19. fish --no-execute passes  [ ] 20. Embedded fish valid
+
 ═══════════════════════════════════════════════════════════════
  PHASE 2: STDERR / STDOUT ROUTING (18 checks)
 ═══════════════════════════════════════════════════════════════
 
   2.1  OUTPUT CONTRACT
-       [ ] 21.  All diagnostic/status messages → stderr (>&2)
-       [ ] 22.  Machine-readable output (--json, data) → stdout only
-       [ ] 23.  --help → stdout (POSIX convention)
-       [ ] 24.  --version → stdout (POSIX convention)
-       [ ] 25.  Error messages → stderr (not mixed with data output)
-       [ ] 26.  --help emits ZERO bytes to stderr (no warnings/banners)
-       [ ] 27.  --version emits ZERO bytes to stderr (no warnings/banners)
-       [ ] 28.  Error help (bad option) → help to stderr, ZERO to stdout
+       [ ] 21. Diagnostics → stderr  [ ] 22. Machine data → stdout
+       [ ] 23. --help → stdout  [ ] 24. --version → stdout
+       [ ] 25. Errors → stderr  [ ] 26. --help: 0 stderr bytes
+       [ ] 27. --version: 0 stderr bytes
+       [ ] 28. Bad option: help to stderr, 0 stdout bytes
 
   2.2  MESSAGE FUNCTIONS
-       [ ] 29.  Central message function routes to stderr
-       [ ] 30.  Color output respects NO_COLOR env variable
-       [ ] 31.  Color output respects --no-color flag
-       [ ] 32.  Color output checks isatty (tput / test -t 2)
-       [ ] 33.  Message levels consistent (ok/fail/info/warn/err/dry)
+       [ ] 29. Central _msg routes to stderr
+       [ ] 30. NO_COLOR env respected  [ ] 31. --no-color flag respected
+       [ ] 32. isatty check (test -t 2)
+       [ ] 33. Levels consistent (ok/fail/info/warn/err/dry)
 
   2.3  COMMAND OUTPUT
-       [ ] 34.  Wrapped command stdout preserved on stdout for callers
-       [ ] 35.  Wrapped command stderr captured and logged separately
-       [ ] 36.  Quiet mode suppresses stdout passthrough
-       [ ] 37.  Verbose mode shows additional detail on stderr
+       [ ] 34. Wrapped stdout preserved  [ ] 35. Wrapped stderr captured
+       [ ] 36. Quiet mode suppresses stdout  [ ] 37. Verbose shows detail
 
   2.4  EXECUTION ORDER
-       [ ] 38.  Early init (root check, env setup) does NOT emit output
-               before option parsing reaches --help/--version.
-               Pattern: set flag silently, defer warnings until after parse.
+       [ ] 38. Root check/env setup silent before --help/--version parse
+
 ═══════════════════════════════════════════════════════════════
  PHASE 3: ERROR HANDLING & EXIT CODES (23 checks)
 ═══════════════════════════════════════════════════════════════
 
-  3.1  EXIT CODE CONVENTION
-       [ ] 39.  exit 0: success, --help, --version
-       [ ] 40.  exit 1: runtime errors
-       [ ] 41.  exit 2: usage errors (bad args, conflicts)
-       [ ] 42.  exit 130: SIGINT (128 + signal number)
-       [ ] 43.  Functions use return (NEVER exit — exit kills the script)
-       [ ] 44.  No bare exit without explicit code
-       [ ] 45.  No exit inside function bodies
-               Scan: rg -n 'exit' "$F" | cross-ref with function boundaries
+  3.1  EXIT CODES
+       [ ] 39. 0: success/help/version  [ ] 40. 1: runtime errors
+       [ ] 41. 2: usage errors  [ ] 42. 130: SIGINT (128+2)
+       [ ] 43. Functions use return not exit
+       [ ] 44. No bare exit without code  [ ] 45. No exit inside functions
 
   3.2  STATUS CAPTURE
-       [ ] 46.  $status captured immediately after commands
-               (before any other command executes)
-       [ ] 47.  $pipestatus used for pipe chains where needed
-       [ ] 48.  Status not clobbered by _log/_msg calls between
-               command execution and $status check
-       [ ] 49.  Verify: rg for 'set -l.*\$status' and confirm no
-               intervening function calls between command and capture
+       [ ] 46. $status captured immediately  [ ] 47. $pipestatus for pipes
+       [ ] 48. Not clobbered by _log/_msg  [ ] 49. No intervening calls
 
   3.3  SIGNAL HANDLERS
-       [ ] 50.  INT (Ctrl+C) handled with cleanup
-       [ ] 51.  TERM handled with cleanup
-       [ ] 52.  HUP handled with cleanup
-       [ ] 53.  fish_exit event handler for guaranteed cleanup
-       [ ] 54.  Signal handlers don't mask the original exit code
+       [ ] 50. INT  [ ] 51. TERM  [ ] 52. HUP  [ ] 53. fish_exit
+       [ ] 54. Handlers don't mask exit code
 
   3.4  CLEANUP GUARANTEE
-       [ ] 55.  Temp files removed on all exit paths
-       [ ] 56.  Lock files removed on all exit paths
-       [ ] 57.  Background processes killed on exit
-       [ ] 58.  Credentials erased on all exit paths (success+failure+signal)
-       [ ] 59.  Sudo keepalive process terminated on exit
-       [ ] 60.  Cleanup function is idempotent (safe to call multiple times)
-       [ ] 61.  Cleanup sweeps /tmp for script-prefixed temp files by UID
-               (find -name 'prefix-*' -user $UID -delete)
+       [ ] 55. Temp files  [ ] 56. Lock files  [ ] 57. Background procs
+       [ ] 58. Credentials erased  [ ] 59. Sudo keepalive terminated
+       [ ] 60. Cleanup idempotent  [ ] 61. UID-scoped /tmp sweep
+
 ═══════════════════════════════════════════════════════════════
  PHASE 4: VARIABLE HANDLING (24 checks)
 ═══════════════════════════════════════════════════════════════
 
   4.1  SCOPE
-       [ ] 62.  Globals use set -g (not implicit global scope)
-       [ ] 63.  Locals use set -l in every function
-       [ ] 64.  Exported vars use set -gx
-       [ ] 65.  No scope leaks (local var shadows global unintentionally)
-       [ ] 66.  Loop variables scoped to function (set -l before for)
-       [ ] 67.  No top-level set without scope flag
-               Scan: rg -n '^set [^-]' "$F" (outside functions)
+       [ ] 62. Globals: set -g  [ ] 63. Locals: set -l
+       [ ] 64. Exports: set -gx  [ ] 65. No scope leaks
+       [ ] 66. Loop vars scoped  [ ] 67. No top-level set without flag
 
   4.2  set --erase AUDIT
-       [ ] 68.  All set --erase calls use modern syntax (not set -e)
-       [ ] 69.  No unnecessary 2>/dev/null on set --erase
-               (set --erase never produces stderr)
-       [ ] 70.  Credentials erased after use on ALL code paths
-       [ ] 71.  set --erase usage consistent (all with or all without
-               2>/dev/null — must not be mixed)
+       [ ] 68. Modern syntax (not set -e)  [ ] 69. No unnecessary 2>/dev/null
+       [ ] 70. Creds erased on ALL paths  [ ] 71. Consistent style
 
   4.3  FOR-LOOP VARIABLES
-       [ ] 72.  Unquoted: for x in $ARRAY (correct fish idiom)
-       [ ] 73.  NOT quoted: for x in "$ARRAY" never used
-               (would join to single string — broken)
-       [ ] 74.  Loop body handles empty arrays (zero iterations is safe)
+       [ ] 72. Unquoted: for x in $ARRAY  [ ] 73. Never "for x in "$ARRAY""
+       [ ] 74. Empty array safe
 
   4.4  UNNECESSARY REDIRECTS ON BUILTINS
-       [ ] 75.  No 2>/dev/null on: set, set --erase
-       [ ] 76.  No 2>/dev/null on: command -q, type -q
-       [ ] 77.  2>/dev/null on set -l var (external-cmd) is OK
-               (suppresses external command stderr, not set's)
+       [ ] 75. No 2>/dev/null on set  [ ] 76. No 2>/dev/null on command -q
+       [ ] 77. OK on set -l var (external-cmd) — suppresses cmd stderr
 
-  4.5  NAMING CONVENTIONS
-       [ ] 78.  UPPER_SNAKE for user-facing globals
-       [ ] 79.  _UPPER_SNAKE for internal globals
-       [ ] 80.  lower_snake for local variables
-       [ ] 81.  Function names use lowercase with underscores
-       [ ] 82.  No single-letter variables except in tight loops (i, x)
-       [ ] 83.  Single-letter vars in non-loop contexts are STYLE findings
+  4.5  NAMING
+       [ ] 78. UPPER_SNAKE user globals  [ ] 79. _UPPER internal globals
+       [ ] 80. lower_snake locals  [ ] 81. Functions lowercase+underscore
+       [ ] 82. No single-letter outside tight loops  [ ] 83. Flag if found
 
   4.6  QUOTING
-       [ ] 84.  Variables in test/string commands quoted ("$var")
-       [ ] 85.  File path variables quoted in all contexts
+       [ ] 84. Vars quoted in test/string  [ ] 85. Paths always quoted
+
 ═══════════════════════════════════════════════════════════════
  PHASE 5: SECURITY (37 checks)
 ═══════════════════════════════════════════════════════════════
 
   5.1  COMMAND INJECTION
-       [ ] 86.  No eval or dynamic command construction
-       [ ] 87.  All user input validated before use in commands
-       [ ] 88.  File paths use -- separator (prevents flag injection)
-       [ ] 89.  No unchecked string interpolation in commands
-       [ ] 90.  No command names constructed from variables
-       [ ] 91.  Only $argv used as command invocation (in _run-style
-               wrappers) — all other variable-as-command is a finding
+       [ ] 86. No eval  [ ] 87. Input validated  [ ] 88. -- separators
+       [ ] 89. No unchecked interpolation  [ ] 90. No var-as-command
+       [ ] 91. Only $argv in _run-style wrappers
 
   5.2  TEMP FILES
-       [ ] 92.  Created with mktemp (not predictable names)
-       [ ] 93.  Symlink check before writing (TOCTOU prevention)
-       [ ] 94.  Error handling if mktemp fails (fallback or abort)
-       [ ] 95.  Cleaned up on all exit paths (normal + signal)
-       [ ] 96.  Owned by current user (find by -user UID for cleanup)
-       [ ] 97.  Temp file prefix is unique to the script
-       [ ] 98.  No temp files in world-writable dirs without mktemp
+       [ ] 92. mktemp  [ ] 93. TOCTOU mitigated  [ ] 94. mktemp fail handled
+       [ ] 95. Cleaned on all paths  [ ] 96. UID-owned  [ ] 97. Unique prefix
+       [ ] 98. No predictable names in /tmp
 
   5.3  CREDENTIAL HANDLING
-       [ ] 99.  Passwords/keys read with read -s (hidden input)
-       [ ] 100. Credentials erased after use (set --erase)
-       [ ] 101. Credentials redacted in logs (pattern-based)
-       [ ] 102. Credential files written with 0600 permissions
-       [ ] 103. No credentials in command-line arguments (visible in ps)
-       [ ] 104. Credential variables not exported to child processes
-       [ ] 105. Special characters in credentials properly escaped
+       [ ] 99. read -s  [ ] 100. Erased after use  [ ] 101. Redacted in logs
+       [ ] 102. 0600 perms  [ ] 103. Not in CLI args  [ ] 104. Not exported
+       [ ] 105. Special chars escaped
 
   5.4  FILE PERMISSIONS
-       [ ] 106. System config files: 644 root:root
-       [ ] 107. User config files: 600 user:group
-       [ ] 108. Credential files: 600 owner:owner
-       [ ] 109. Log files: 600 (contain system info)
-       [ ] 110. Backup directories: 700
-       [ ] 111. chmod set BEFORE mv (atomic permission)
+       [ ] 106. System: 644  [ ] 107. User: 600  [ ] 108. Creds: 600
+       [ ] 109. Logs: 600  [ ] 110. Backup dirs: 700
+       [ ] 111. chmod before mv
 
   5.5  PRIVILEGE SEPARATION
-       [ ] 112. Script warns or aborts if run as root
-       [ ] 113. Root execution forced to dry-run (safety net)
-       [ ] 114. sudo used only for system file operations (least privilege)
-       [ ] 115. sudo keepalive properly started and terminated on exit
-       [ ] 116. Restricted sudo detected and handled gracefully
+       [ ] 112. Root warning/abort  [ ] 113. Root → forced dry-run
+       [ ] 114. sudo least privilege  [ ] 115. Keepalive lifecycle
+       [ ] 116. Restricted sudo handled
 
-  5.6  INPUT VALIDATION (interactive prompts)
-       [ ] 117. Interface names: alphanumeric, length-limited, exists in sysfs
-       [ ] 118. SSIDs: length 1-32, no shell metacharacters, no edge whitespace
-       [ ] 119. Passphrases: 8-63 chars, no newlines, special char escaping
-       [ ] 120. Country codes: validated against known set, uppercased
-       [ ] 121. File paths: canonicalized, no directory traversal
-       [ ] 122. Numeric inputs: validated as integers, range-checked
+  5.6  INPUT VALIDATION
+       [ ] 117. Interface names  [ ] 118. SSIDs (1-32, no metachar, no %)
+       [ ] 119. Passphrases (8-63, no newlines)  [ ] 120. Country codes
+       [ ] 121. Paths (canonical, no traversal)  [ ] 122. Numeric ranges
+
 ═══════════════════════════════════════════════════════════════
  PHASE 6: EMBEDDED CONFIG CONTENT (47 checks)
 ═══════════════════════════════════════════════════════════════
 
-  Verify each embedded config matches its format specification.
-  Three destination arrays: SYSTEM (12), USER (3), SERVICE (2).
+  3 arrays: SYSTEM (12), USER (3), SERVICE (2) = 17 files.
 
-  6.1  SYSTEMD-BOOT (loader.conf)
-       [ ] 123. Format: key<space>value (NO = sign)
-       [ ] 124. Valid keys only: default, timeout, console-mode, editor
+  6.1  SYSTEMD-BOOT
+       [ ] 123. key<space>value (no =)  [ ] 124. Valid keys only
 
   6.2  KERNEL CMDLINE
-       [ ] 125. Format: rw root=UUID=<uuid> param1 param2 ...
-       [ ] 126. UUID dynamically resolved (not hardcoded)
-       [ ] 127. Parameters space-separated, no trailing whitespace
-       [ ] 128. modprobe.d is blacklist-only (no options lines since v2.5.0;
-               all module params in kernel cmdline). [Format rule]
+       [ ] 125. rw root=UUID=<uuid>  [ ] 126. UUID dynamic
+       [ ] 127. Space-separated, no trailing ws
+       [ ] 128. modprobe.d blacklist-only (no options since v2.5.0)
 
   6.3  SDBOOT-MANAGE
-       [ ] 129. Format: KEY="VALUE" (shell-style quoting)
-       [ ] 130. Required keys: LINUX_OPTIONS, LINUX_FALLBACK_OPTIONS,
-               DEFAULT_ENTRY, OVERWRITE_EXISTING, REMOVE_EXISTING,
-               REMOVE_OBSOLETE
-       [ ] 131. LINUX_FALLBACK_OPTIONS value is "quiet" (minimal fallback)
-       [ ] 132. LINUX_OPTIONS contains all KERNEL_PARAMS entries
+       [ ] 129. KEY="VALUE"  [ ] 130. Required keys present
+       [ ] 131. FALLBACK="quiet"  [ ] 132. OPTIONS ⊇ KERNEL_PARAMS
 
   6.4  MKINITCPIO
-       [ ] 133. Format: MODULES=(...) HOOKS=(...) COMPRESSION="..."
-       [ ] 134. HOOKS order: base first
-       [ ] 135. HOOKS order: systemd before sd-vconsole
-       [ ] 136. HOOKS order: keyboard before sd-vconsole
-       [ ] 137. HOOKS order: filesystems before fsck
-       [ ] 138. MODULES validated via modprobe -n
+       [ ] 133. MODULES=() HOOKS=() COMPRESSION=""
+       [ ] 134. base first  [ ] 135. systemd before sd-vconsole
+       [ ] 136. keyboard before sd-vconsole  [ ] 137. filesystems before fsck
+       [ ] 138. Modules validated via modprobe -n
 
   6.5  MODPROBE
-       [ ] 139. No "options" lines in modprobe output (blacklist-only since v2.5.0;
-               regression guard — verify get_file_content modprobe case). [Content]
-       [ ] 140. blacklist format: blacklist <module>
-       [ ] 141. Module names validated via modprobe -n
-       [ ] 142. Blacklist entries cross-referenced with cmdline
+       [ ] 139. No "options" lines (regression)  [ ] 140. blacklist format
+       [ ] 141. Modules validated  [ ] 142. Cross-ref with cmdline
 
   6.6  MODULES-LOAD
-       [ ] 143. Format: one module name per line, no options
+       [ ] 143. One module per line, no options
 
-  6.7  UDEV RULES
-       [ ] 144. Match operators use == (never single = for match)
-       [ ] 145. Assignment operators use = (never == for assign)
-       [ ] 146. ATTR{} syntax correct
-       [ ] 147. No empty match values
+  6.7  UDEV
+       [ ] 144. == for match  [ ] 145. = for assign
+       [ ] 146. ATTR{} correct  [ ] 147. No empty match values
 
-  6.8  SYSTEMD UNITS (SYSTEM_DESTINATIONS + SERVICE_DESTINATIONS)
-       [ ] 148. Sections present: [Unit], [Service], [Install]
-       [ ] 149. After= dependencies correct and justified
-       [ ] 150. ExecStart uses absolute paths
-       [ ] 151. Validated with systemd-analyze verify
-       [ ] 152. Type= matches ExecStart behavior (oneshot, simple, etc.)
-       [ ] 153. amdgpu-performance.service: ExecStart uses bash -c, retry
-               loop present, sysfs path /sys/class/drm used, WantedBy=graphical.target
-       [ ] 154. cpupower-epp.service: ExecStart uses bash -c, EPP path
-               /sys/devices/system/cpu used, After=cpupower.service,
-               WantedBy=multi-user.target, TimeoutStartSec set
+  6.8  SYSTEMD UNITS
+       [ ] 148. [Unit] [Service] [Install]  [ ] 149. After= correct
+       [ ] 150. ExecStart absolute paths  [ ] 151. systemd-analyze verify
+       [ ] 152. Type= matches behavior
+       [ ] 153. amdgpu-performance: bash -c, retry, /sys/class/drm, graphical.target
+       [ ] 154. cpupower-epp: bash -c, EPP path, After=cpupower, multi-user, Timeout
 
-  6.9  SYSTEMD DROP-IN CONFIGS
-       [ ] 155. No journald.conf.d case in get_file_content (removed in v2.5.0;
-               regression guard — verify no JOURNALD_ variables, no DESTINATIONS entry)
-       [ ] 156. No coredump.conf.d case in get_file_content (removed in v2.5.0;
-               regression guard — verify no COREDUMP_ variables, no DESTINATIONS entry)
-       [ ] 157. resolved.conf.d: [Resolve] section (NOT [Resolved])
-       [ ] 158. logind.conf.d: [Login] section header
+  6.9  DROP-INS
+       [ ] 155. No journald.conf.d (removed v2.5.0, regression)
+       [ ] 156. No coredump.conf.d (removed v2.5.0, regression)
+       [ ] 157. resolved: [Resolve] not [Resolved]
+       [ ] 158. logind: [Login] section
 
   6.10 IWD
-       [ ] 159. Sections: [General], [DriverQuirks], [Network]
-       [ ] 160. Valid keys per section
+       [ ] 159. [General] [DriverQuirks] [Network]  [ ] 160. Valid keys
 
   6.11 NETWORKMANAGER
-       [ ] 161. Sections: [device], [connection], [logging]
-       [ ] 162. wifi.powersave value correct (0=default 1=ignore 2=disable 3=enable)
-       [ ] 163. wifi.backend matches actual installed backend
+       [ ] 161. [device] [connection] [logging]
+       [ ] 162. wifi.powersave correct  [ ] 163. wifi.backend matches
 
   6.12 WIRELESS-REGDOM
-       [ ] 164. Format: WIRELESS_REGDOM="XX" (quoted, two-letter)
+       [ ] 164. WIRELESS_REGDOM="XX"
 
   6.13 ENVIRONMENT.D
-       [ ] 165. Format: KEY=VALUE (no export, no quotes around value)
-       [ ] 166. ${XDG_RUNTIME_DIR} expansion used correctly (systemd resolves)
+       [ ] 165. KEY=VALUE (no export/quotes)  [ ] 166. XDG_RUNTIME_DIR
 
-  6.14 FISH CONFIGS (USER_DESTINATIONS)
-       [ ] 167. Valid fish syntax verified (fish --no-execute)
-       [ ] 168. Proper guards (status is-interactive, set -q checks)
-       [ ] 169. SSH auth sock priority ordering documented and correct
-               (forwarded > gcr > systemd, checked in that order)
+  6.14 FISH CONFIGS
+       [ ] 167. fish --no-execute valid  [ ] 168. Guards present
+       [ ] 169. SSH auth sock priority (forwarded > gcr > systemd)
+
 ═══════════════════════════════════════════════════════════════
  PHASE 7: CROSS-REFERENCES & CONSISTENCY (25 checks)
 ═══════════════════════════════════════════════════════════════
 
-  See userPreferences [AUDIT] cross_refs for sync targets.
-
   7.1  VERSION SYNC
-       [ ] 170. Header comment version matches global variable
-       [ ] 171. Global variable matches README version
-       [ ] 172. Changelog entry exists for current version
-       [ ] 173. Internal lint verifies version sync automatically
+       [ ] 170. Header = global  [ ] 171. Global = README
+       [ ] 172. Changelog entry exists  [ ] 173. Lint verifies auto
 
-  7.2  FILE COUNTS (split destination arrays)
-       [ ] 174. SYSTEM_DESTINATIONS count matches get_file_content
-               system-path case count
-       [ ] 175. USER_DESTINATIONS count matches get_file_content
-               glob-path case count (pattern: '*/.config/...')
-       [ ] 176. SERVICE_DESTINATIONS count matches get_file_content
-               service unit case count
-       [ ] 177. Progress bar step count matches actual function calls
-       [ ] 178. README file count claim matches total
-               (SYSTEM + USER + SERVICE destinations)
-       [ ] 179. Fallback case ('*') returns 1 for unknown files
+  7.2  FILE COUNTS
+       [ ] 174. SYSTEM count = get_file_content cases
+       [ ] 175. USER count = get_file_content glob cases
+       [ ] 176. SERVICE count = get_file_content service cases
+       [ ] 177. Progress steps = actual calls
+       [ ] 178. README count = total  [ ] 179. '*' fallback returns 1
 
   7.3  PARAMETER CROSS-REFS
-       [ ] 180. modprobe.d contains blacklist entries only (no options lines;
-               no MODPROBE_OPTIONS variable; regression guard). [Cross-ref]
-       [ ] 181. MKINITCPIO_MODULES match modules needed for hardware
-       [ ] 182. Blacklist entries consistent between cmdline and modprobe.d
-       [ ] 183. ENV_VARS match between environment.d and runtime verification
+       [ ] 180. modprobe.d blacklist-only (regression)
+       [ ] 181. MKINITCPIO_MODULES match hardware
+       [ ] 182. Blacklist consistent cmdline↔modprobe
+       [ ] 183. ENV_VARS match environment.d↔runtime verify
 
   7.4  README ↔ HELP
-       [ ] 184. All --help options appear in README option table
-       [ ] 185. Sub-options documented (--diff --fix, --diff <path>,
-               --diagnose --stress, --diagnose --json, --watch --interval N,
-               --watch --once)
-       [ ] 186. Standalone modifier flags (--fix, --stress, --json, --interval,
-               --once, --no-log, --profile) appear as separate entries in
-               README options table, not only as combined examples
-       [ ] 187. --logs sub-targets documented (analyze, last, all, list,
-               system, gpu, wifi, boot, audio, usb, kernel, <service>)
-       [ ] 188. --install-file usage and path requirement documented
-       [ ] 189. Exit codes documented in README
-       [ ] 190. Prerequisites listed accurately
+       [ ] 184. All --help options in README
+       [ ] 185. Sub-options documented (--diff --fix, --watch --once, etc.)
+       [ ] 186. Modifiers as separate entries (--fix, --stress, --json, etc.)
+       [ ] 187. --logs sub-targets documented
+       [ ] 188. --install-file documented  [ ] 189. Exit codes documented
+       [ ] 190. Prerequisites listed
 
-  7.5  NEW MODE CROSS-REFS (v2.6.0+)
-       [ ] 191. --watch documented with --interval in README options table
-       [ ] 192. --no-log documented in README options table
-       [ ] 193. --watch --once documented in README options table (v2.8.0)
-       [ ] 194. README sample output present for complex modes
-               (e.g., --diagnose sample output section) (v2.8.0)
-               --profile documented in OPTIONS section (v2.8.1)
+  7.5  MODE CROSS-REFS
+       [ ] 191. --watch + --interval in README  [ ] 192. --no-log in README
+       [ ] 193. --watch --once in README  [ ] 194. --profile in README
+
 ═══════════════════════════════════════════════════════════════
  PHASE 8: FUNCTION ARCHITECTURE (37 checks)
 ═══════════════════════════════════════════════════════════════
 
-  8.1  ARITY VALIDATION
-       [ ] 195. Functions validate argument count at entry
-       [ ] 196. Error messages include expected vs actual count
-       [ ] 197. Functions return 1 on arity error (not exit)
+  8.1  ARITY
+       [ ] 195. Count validated at entry  [ ] 196. Error messages show counts
+       [ ] 197. Return 1 on error (not exit)
 
-  8.2  ATOMIC FILE OPERATIONS
-       [ ] 198. Write to temp file first (never directly to destination)
-       [ ] 199. Set permissions on temp file before mv
-       [ ] 200. Atomic mv to destination (same filesystem)
-       [ ] 201. Symlink detection before write
-       [ ] 202. Owner/group set correctly on destination
+  8.2  ATOMIC FILE OPS
+       [ ] 198. Write to tmp first  [ ] 199. Perms before mv
+       [ ] 200. Atomic mv (same fs)  [ ] 201. Symlink detection
+       [ ] 202. Owner/group correct
 
   8.3  IDEMPOTENCY
-       [ ] 203. Re-running produces identical result
-       [ ] 204. Diff-before-write skips unchanged files
-       [ ] 205. pacman --needed for package installs
-       [ ] 206. Service enable is idempotent
+       [ ] 203. Re-run identical  [ ] 204. Diff-before-write skip
+       [ ] 205. pacman --needed  [ ] 206. Service enable idempotent
 
   8.4  LOGGING
-       [ ] 207. Structured format (JSONL/JSON preferred)
-       [ ] 208. Timestamps on all log entries
-       [ ] 209. Sensitive data redacted from logs
-       [ ] 210. Log rotation respects MAX_LOGS threshold
-               (oldest logs removed when count > MAX_LOGS)
-       [ ] 211. Log file permissions 0600
-       [ ] 212. JSON strings properly escaped (_json_str or equivalent)
+       [ ] 207. JSONL format  [ ] 208. Timestamps  [ ] 209. Sensitive redacted
+       [ ] 210. MAX_LOGS rotation  [ ] 211. Log perms 0600
+       [ ] 212. _json_str escaping
 
   8.5  LOCK FILE
-       [ ] 213. Prevents concurrent execution
-       [ ] 214. Lock uses atomic mkdir primitive (mkdir-only since v2.8.2;
-               no flock, no exec fd redirection)
-       [ ] 215. Stale locks reclaimed (kill -0 check + find cleanup +
-               rmdir + re-mkdir for atomic re-acquisition)
-       [ ] 216. Lock cleaned up on exit (all paths)
-       [ ] 217. PID stored inside lock dir (not the lock mechanism itself)
-       [ ] 218. REGRESSION GUARD (v2.8.2): No flock, exec 9>, or
-               _LOCK_METHOD=flock references remain. Lock is mkdir-only.
-               Scan: rg 'flock|exec 9|_LOCK_METHOD.*flock' — expect 0 hits.
+       [ ] 213. Prevents concurrent  [ ] 214. mkdir-only (since v2.8.2)
+       [ ] 215. Stale reclaim (kill -0 + find + rmdir + re-mkdir)
+       [ ] 216. Cleaned on all paths  [ ] 217. PID in lock dir
+       [ ] 218. REGRESSION: rg 'flock|exec 9|_LOCK_METHOD.*flock' → 0 hits
 
-  8.6  BACKUP SUBSYSTEM
-       [ ] 219. _backup_init creates dated backup dir under BACKUP_BASE
-       [ ] 220. _backup_path preserves directory structure for system files
-       [ ] 221. _backup_boot performs flat copy of /boot contents
-       [ ] 222. Backup rotation respects MAX_BACKUPS threshold
-               (oldest backup dirs removed when count > MAX_BACKUPS)
-       [ ] 223. Backup dirs created with 700 permissions
-       [ ] 224. _install_backup called before any mutation in do_install
+  8.6  BACKUP
+       [ ] 219. _backup_init dated dir  [ ] 220. _backup_path preserves structure
+       [ ] 221. _backup_boot flat /boot  [ ] 222. MAX_BACKUPS rotation
+       [ ] 223. 700 perms  [ ] 224. Called before mutation
 
-  8.7  INSTALL_FILES WRAPPER (v2.6.0)
-       [ ] 225. install_files argparse temp file created with mktemp
-       [ ] 226. Argparse temp file cleaned on success AND on argparse error
-               (verify rm -f on both branches — no orphaned /tmp/ry-argparse.*)
+  8.7  INSTALL_FILES WRAPPER
+       [ ] 225. Argparse tmp via mktemp
+       [ ] 226. Cleaned on both success AND argparse error
 
   8.8  EXTERNAL COMMAND AUDIT
-       [ ] 227. Every external binary invoked has a command -q preflight check
-       [ ] 228. Error handling on external command failure (or return 1)
-       [ ] 229. No version assumptions on external tools without verification
+       [ ] 227. command -q preflight  [ ] 228. Failure handling
+       [ ] 229. No version assumptions
 
   8.9  PRE-LOCK VALIDATION (v2.8.0)
-       [ ] 230. Arguments that determine exit 2 (usage error) validated
-               BEFORE _acquire_lock. Pattern: validate → lock → execute.
-               Prevents usage errors from being masked by lock failure.
-               Scan: for each mode that acquires lock, trace whether arg
-               validation happens before or after _acquire_lock call.
+       [ ] 230. Usage errors validated BEFORE _acquire_lock
 
   8.10 DISPATCH QUOTING (v2.8.0)
-       [ ] 231. Variable arguments in mode dispatch switch are quoted:
-               do_func "$TARGET" (not do_func $TARGET).
-               Prevents word splitting on paths with spaces.
-               Scan: rg 'do_\w+ \$' — all hits should use quotes.
+       [ ] 231. do_func "$TARGET" quoted (rg 'do_\w+ \$' → all quoted)
+
 ═══════════════════════════════════════════════════════════════
  PHASE 9: PATTERNS & ANTI-PATTERNS (15 checks)
 ═══════════════════════════════════════════════════════════════
 
-  9.1  KNOWN FALSE POSITIVES (do NOT flag these)
-       [ ] 232. "text"(command) — valid fish string concatenation
-               Count occurrences, verify pattern is consistent
-       [ ] 233. Unquoted $ARRAY in for-loops — correct fish idiom
-       [ ] 234. $() inside awk/sed/ExecStart — embedded bash, not fish
-       [ ] 235. [[:class:]] inside grep -E — character class, not [[ ]]
+  9.1  FALSE POSITIVES (do NOT flag)
+       [ ] 232. "text"(command) — valid concat
+       [ ] 233. Unquoted $ARRAY in for-loops — correct
+       [ ] 234. $() inside awk/ExecStart — embedded bash
+       [ ] 235. [[:class:]] inside grep -E — char class
 
-  9.2  ANTI-PATTERNS TO FLAG
-       [ ] 236. grep -q | ... (dead pipe — grep -q closes early)
-       [ ] 237. cat file | grep (useless cat — use grep file)
-       [ ] 238. test "$var" = "" (use test -z "$var")
-       [ ] 239. Bare find without command prefix (fish may shadow)
-       [ ] 240. head -1 / tail -1 (deprecated — use -n 1)
-       [ ] 241. Nested command substitution without clarity
-       [ ] 242. FISH REDIRECT BUG: string trim < "$file" 2>/dev/null on
-               files that may not exist leaks unsilenceable stderr.
-               Use: string trim -- (cat -- "$file" 2>/dev/null)
-               Scan: rg 'string (trim|match|replace).*<' | rg -v '#|test -f'
-               Requires RUNTIME test — static analysis cannot catch this.
+  9.2  ANTI-PATTERNS
+       [ ] 236. grep -q | ... (dead pipe)
+       [ ] 237. cat file | grep (useless cat)
+       [ ] 238. test "$var" = "" (use -z)
+       [ ] 239. Bare find without command prefix
+       [ ] 240. head -1 / tail -1 (use -n 1)
+       [ ] 241. Nested substitution without clarity
+       [ ] 242. REDIRECT BUG: string trim < "$file" 2>/dev/null on
+               nonexistent files leaks stderr → use cat -- 2>/dev/null.
+               RUNTIME-only test.
 
-  9.3  STYLE CONSISTENCY
-       [ ] 243. Consistent indentation (spaces, not tabs)
-       [ ] 244. Functions ≤50 lines where practical
-       [ ] 245. No dead code (unreachable branches, unused functions)
-       [ ] 246. Comments explain WHY, not WHAT
+  9.3  STYLE
+       [ ] 243. Consistent indentation  [ ] 244. Functions ≤50 lines
+       [ ] 245. No dead code  [ ] 246. Comments explain WHY
+
 ═══════════════════════════════════════════════════════════════
  PHASE 10: MAGIC NUMBERS & DOCUMENTATION (19 checks)
 ═══════════════════════════════════════════════════════════════
 
   10.1 MAGIC NUMBERS
-       [ ] 247. All numeric constants named as variables or commented
-       [ ] 248. Permission modes documented (700, 600, 644)
-       [ ] 249. Thresholds documented (disk space, rotation limits)
-       [ ] 250. Timeouts documented (keepalive, retry intervals, sleep)
-       [ ] 251. Hardware-specific values documented (ppfeaturemask, etc.)
-       [ ] 252. Exit code 130 documented as SIGINT convention (128+2)
-       [ ] 253. Temperature thresholds documented and named:
-               TEMP_CPU_WARN, TEMP_CPU_CRIT, TEMP_GPU_WARN, TEMP_GPU_CRIT
-       [ ] 254. Disk thresholds documented and named:
-               DISK_ROOT_WARN, DISK_ROOT_CRIT, BOOT_SPACE_WARN, BOOT_SPACE_CRIT
-               (units: percentage for root, MB for boot)
-       [ ] 255. Root available space thresholds named:
-               ROOT_AVAIL_CRIT, ROOT_AVAIL_WARN (units: GB; check_disk_space
-               preflight). NVMe wear threshold named: NVME_LIFE_WARN
-               (units: percentage used). No hardcoded literals in
-               comparisons. (v2.8.0, NVME added v2.8.1)
-       [ ] 256. Rotation limits named and documented:
-               MAX_LOGS, MAX_BACKUPS, CACHE_CLEAN_THRESHOLD
-       [ ] 257. BOOT_TIME_WARN, BOOT_TIME_TARGET documented
-               (seconds; warn threshold and target for slow boot)
-       [ ] 258. Default WATCH_INTERVAL documented (seconds)
+       [ ] 247. All numeric constants named  [ ] 248. Perms documented
+       [ ] 249. Thresholds documented  [ ] 250. Timeouts documented
+       [ ] 251. Hardware values documented  [ ] 252. 130 = SIGINT
+       [ ] 253. TEMP_CPU_WARN/CRIT, TEMP_GPU_WARN/CRIT
+       [ ] 254. DISK_ROOT_WARN/CRIT, BOOT_SPACE_WARN/CRIT
+       [ ] 255. ROOT_AVAIL_CRIT/WARN (GB), NVME_LIFE_WARN (%)
+       [ ] 256. MAX_LOGS, MAX_BACKUPS, CACHE_CLEAN_THRESHOLD
+       [ ] 257. BOOT_TIME_WARN, BOOT_TIME_TARGET
+       [ ] 258. WATCH_INTERVAL default
 
   10.2 DOCUMENTATION
-       [ ] 259. --help covers all modes and flags
-       [ ] 260. Inline comments explain non-obvious design decisions
-       [ ] 261. Cross-references noted in comments
-               (e.g., "also in MODPROBE_BLACKLIST")
-       [ ] 262. Fish completions generated and installable
-       [ ] 263. README has quick-start, options table, and config reference
-       [ ] 264. Changelog covers all versions with breaking changes noted
-       [ ] 265. License file present
+       [ ] 259. --help covers all modes/flags
+       [ ] 260. Inline comments for non-obvious decisions
+       [ ] 261. Cross-refs noted  [ ] 262. Completions generated
+       [ ] 263. README: quick-start, options, config ref
+       [ ] 264. Changelog covers versions  [ ] 265. LICENSE present
+
 ═══════════════════════════════════════════════════════════════
  PHASE 11: TESTING & VALIDATION (23 checks)
 ═══════════════════════════════════════════════════════════════
 
-  11.1 PREFLIGHT CHECKS
-       [ ] 266. Required external commands verified (command -q)
-       [ ] 267. Disk space checked before writes (root + /boot)
-               using DISK_ROOT_CRIT, BOOT_SPACE_CRIT, ROOT_AVAIL_CRIT
-       [ ] 268. Network connectivity verified before network operations
-       [ ] 269. Hardware fingerprint validated (if hardware-specific)
-       [ ] 270. Kernel version checked (if features depend on it)
-       [ ] 271. systemd version checked (if features depend on it)
-       [ ] 272. Dependency list accuracy: check_deps lists ONLY commands
-               actually used by the script. Removed features (e.g., curl
-               after WiFi moved to nmcli) must be pruned from dep list.
-               Scan: cross-ref check_deps command list with actual usage.
-               (v2.8.0)
+  11.1 PREFLIGHT
+       [ ] 266. Deps verified  [ ] 267. Disk space checked
+       [ ] 268. Network verified  [ ] 269. HW fingerprint validated
+       [ ] 270. Kernel version  [ ] 271. systemd version
+       [ ] 272. Dep list accuracy (check_deps = actual usage, no stale)
 
   11.2 CONFIG VALIDATION
-       [ ] 273. fish --no-execute on generated fish scripts
-       [ ] 274. systemd-analyze verify on generated units (including
-               SERVICE_DESTINATIONS: amdgpu-performance, cpupower-epp)
-       [ ] 275. modprobe -n on module names
-       [ ] 276. INI-style configs have section headers present
-       [ ] 277. udev rules have no empty match values
-       [ ] 278. Hook ordering validated programmatically
+       [ ] 273. fish --no-execute on generated  [ ] 274. systemd-analyze verify
+       [ ] 275. modprobe -n  [ ] 276. INI section headers
+       [ ] 277. udev no empty match  [ ] 278. Hook order programmatic
 
   11.3 INTERNAL LINT
-       [ ] 279. Version cross-references verified by lint mode
-       [ ] 280. File/case count consistency checked
-       [ ] 281. Anti-pattern self-scan (script checks itself)
-       [ ] 282. Progress step count matches actual calls
+       [ ] 279. Version sync  [ ] 280. File/case counts
+       [ ] 281. Anti-pattern self-scan  [ ] 282. Progress = actual
 
-  11.4 DRY-RUN MODE
-       [ ] 283. All write operations skipped in dry-run
-       [ ] 284. Dry-run logged with distinct event type
-       [ ] 285. DRY-RUN gates verified on ALL write paths:
-               install_file, _run, WiFi, regdom, pacman, systemctl
+  11.4 DRY-RUN
+       [ ] 283. All writes skipped  [ ] 284. Logged as DRY
+       [ ] 285. Gates on ALL write paths
 
-  11.5 ROLLBACK & RECOVERY
-       [ ] 286. Every destructive operation has undo path or --dry-run guard
-       [ ] 287. Backup created before overwrite of existing files
-       [ ] 288. Recovery instructions documented for failed mid-run
+  11.5 ROLLBACK
+       [ ] 286. Destructive ops have undo/dry-run
+       [ ] 287. Backup before overwrite  [ ] 288. Recovery documented
+
 ═══════════════════════════════════════════════════════════════
- PHASE 12: RUNTIME EXECUTION TESTING (29 checks)
+ PHASE 12: RUNTIME EXECUTION (29 checks)
 ═══════════════════════════════════════════════════════════════
 
-  Phases 1-11 are static analysis. This phase EXECUTES the script
-  in fish and verifies actual behavior against the output contract.
-  Prerequisite: fish installed, script accessible at known path.
-  Use the runtime test harness from PASS 5 above.
+  Prerequisite: fish installed. Use PASS 3 harness above.
 
-  12.1 STDOUT / STDERR SEPARATION
-       [ ] 289. --help: stdout has content, stderr is empty (0 bytes)
-       [ ] 290. --version: stdout has version string, stderr is empty
-       [ ] 291. Each operational mode (--lint, --diff, --clean,
-               --verify-static, --verify-runtime, --logs list, etc.):
-               all output to stderr, zero bytes on stdout
-       [ ] 292. Error cases (invalid option): error+help to stderr,
-               zero bytes on stdout
+  12.1 STDOUT/STDERR SEPARATION
+       [ ] 289. --help: stdout content, 0 stderr
+       [ ] 290. --version: stdout version, 0 stderr
+       [ ] 291. Op modes: all to stderr, 0 stdout
+       [ ] 292. Errors: stderr only, 0 stdout
 
   12.2 EXIT CODE MATRIX
-       [ ] 293. exit 0: --help, -h, --version, -v, --lint, --completions,
-               --test-all (all subtests pass), --logs list, --logs system,
-               --profile (modifier, no standalone mode)
-       [ ] 294. exit 2: invalid flag, conflicting modes, modifier without
-               parent (--fix alone, --stress alone, --once alone),
-               --interval missing/bad value, --install-file without path,
-               --diff relative/path (non-absolute)
-       [ ] 295. exit 1: runtime failures (verify-static without sudo,
-               --logs analyze with missing file, --watch on non-tty, etc.)
-       [ ] 296. Modifier-only guards emit WARN (not exit 2) for:
-               --interval when MODE != watch (warning + continue)
-               --json when MODE != diagnose (warning + continue)
-               --once when MODE != watch (warning + continue)
-               Scan: verify these are set_color warn / _warn, not exit 2
+       [ ] 293. 0: --help, -h, --version, -v, --lint, --completions,
+               --test-all, --logs list/system, --profile
+       [ ] 294. 2: invalid flag, conflicts, modifier-only (--fix/--stress
+               /--once alone), bad --interval, --install-file no path,
+               --diff relative/path
+       [ ] 295. 1: runtime failures (verify-static no sudo, etc.)
+       [ ] 296. Modifier WARN (not exit 2): --interval/--json/--once
+               without parent mode
 
-  12.3 OPTION VALIDATION (run each, check exit code + stderr)
-       [ ] 297. Every flag accepted without crash (iterate all flags)
-       [ ] 298. Modifier guards: --fix requires --diff, --stress requires
-               --diagnose, --json requires --diagnose (else WARN not exit)
-       [ ] 299. Multiple modes rejected (--diff --lint → exit 2)
-       [ ] 300. -- separator stops option parsing
-       [ ] 301. --interval: missing value → exit 2, non-numeric → exit 2,
-               zero → exit 2, negative → exit 2
-       [ ] 302. --install-file: missing path arg → exit 2 (pre-lock, v2.8.0)
-       [ ] 303. --diff <path>: non-absolute path → exit 2,
-               non-managed path → exit 1, valid managed path → exit 0
+  12.3 OPTION VALIDATION
+       [ ] 297. Every flag accepted  [ ] 298. Modifier guards enforced
+       [ ] 299. Multiple modes → exit 2  [ ] 300. -- stops parsing
+       [ ] 301. --interval: missing/non-numeric/0/negative → exit 2
+       [ ] 302. --install-file: no path → exit 2 (pre-lock)
+       [ ] 303. --diff <path>: non-absolute → 2, non-managed → 1, valid → 0
 
-  12.4 NO_COLOR ENFORCEMENT
-       [ ] 304. --no-color: rg -cP '\x1b\[' finds ZERO ANSI escapes
-               across ALL modes (test each mode with --no-color).
-               Includes do_watch clear-screen escape (\033[2J\033[H)
-               which must fall back to newlines when NO_COLOR (v2.8.3).
+  12.4 NO_COLOR
+       [ ] 304. 0 ANSI escapes across ALL modes with --no-color.
+               Includes do_watch clear-screen fallback to newlines (v2.8.3).
 
-  12.5 DRY-RUN VERIFICATION
-       [ ] 305. --dry-run: [DRY] messages appear in output, no files
-               modified on filesystem (check mtime of /etc/* before/after)
+  12.5 DRY-RUN
+       [ ] 305. [DRY] messages, 0 filesystem changes
 
   12.6 INTERNAL CONSISTENCY
-       [ ] 306. Script's own --lint passes (version sync, file count,
-               progress count, anti-pattern self-scan)
-       [ ] 307. --test-all runs and reports pass/fail for all sub-modes;
-               exit 0 when all pass, exit 1 when any fail
-       [ ] 308. --logs with no sub-target returns usage and exit 2
-       [ ] 309. --logs analyze with nonexistent file returns exit 1
+       [ ] 306. --lint passes  [ ] 307. --test-all reports correctly
+       [ ] 308. --logs no sub-target → exit 2
+       [ ] 309. --logs analyze nonexistent → exit 1
 
-  12.7 MODE-SPECIFIC VERIFICATION (v2.6.0+)
-       [ ] 310. --watch on non-tty (piped stdin) returns exit 1 with
-               descriptive error on stderr
-       [ ] 311. --no-log: no "Log file:" message on stderr, no .jsonl
-               created (verify LOG_FILE set to /dev/null)
-       [ ] 312. --diff <path> with valid managed absolute path shows
-               diff for that single file only
-       [ ] 313. --no-log --version: clean exit 0, no log artifacts
+  12.7 MODE-SPECIFIC
+       [ ] 310. --watch non-tty → exit 1 + error on stderr
+       [ ] 311. --no-log: no "Log file:", no .jsonl created
+       [ ] 312. --diff <path>: shows single file diff
+       [ ] 313. --no-log --version: clean exit 0
 
-  12.8 --WATCH --ONCE VERIFICATION (v2.8.0)
-       [ ] 314. --watch --once on non-tty (piped stdin): exits 0 with
-               dashboard output on stdout/stderr (tty gate relaxed)
-       [ ] 315. --watch --once: renders exactly one frame then exits
-               (no read -t loop, no "q to quit" prompt)
-       [ ] 316. --once without --watch: emits WARN and resets to false
-               (does not exit 2; graceful degradation)
+  12.8 --WATCH --ONCE (v2.8.0)
+       [ ] 314. Non-tty: exits 0, dashboard output (tty gate relaxed)
+       [ ] 315. Renders one frame then exits (no loop/prompt)
+       [ ] 316. --once without --watch: WARN + resets (no exit 2)
 
-  12.9 --PROFILE VERIFICATION (v2.8.1)
-       [ ] 325. --profile: [PROFILE] timing messages appear on stderr
-               for modes with progress steps (e.g., --dry-run --profile).
-               Respects NO_COLOR (printf plain vs set_color magenta).
-               No [PROFILE] output when flag not set.
+  12.9 --PROFILE (v2.8.1)
+       [ ] 325. [PROFILE] on stderr, NO_COLOR respected, absent when unset
+
+  12.10 DO_WATCH ISATTY GUARD (v2.8.4)
+       [ ] 326. Color output in do_watch gated by isatty 1 (not just
+               NO_COLOR). Non-tty stdout suppresses ANSI escapes even
+               without --no-color. Regression: rg 'isatty 1' do_watch.
+
 ═══════════════════════════════════════════════════════════════
  PHASE 13: GAP ANALYSIS & EDGE CASES (8 checks)
 ═══════════════════════════════════════════════════════════════
 
-  After all other phases, systematically check categories that
-  static analysis tends to miss. Trace actual code paths.
+  Use PASS 4 data. Trace actual code paths.
 
-  13.1 RACE CONDITIONS (TOCTOU) & CONCURRENCY
-       [ ] 317. Symlink checks: mktemp creates with O_EXCL; any gap
-               between check and use is mitigated by file ownership
-       [ ] 318. All temp→destination paths: no window where attacker
-               can substitute file (mktemp in target dir, not /tmp)
+  13.1 RACE CONDITIONS
+       [ ] 317. mktemp O_EXCL, no check-use gap
+       [ ] 318. No attacker substitution window (mktemp in target dir)
 
   13.2 ERROR PATH COMPLETENESS
        [ ] 319. Every tmpfile has cleanup on EVERY error branch
-               (trace each function: for each mktemp, verify rm -f
-               on every return/continue path — includes install_files
-               argparse temp at /tmp/ry-argparse.*)
-       [ ] 320. Credential variables erased on every error path
-               (count set --erase calls vs error branches)
-       [ ] 321. Signal handler cleanup covers all tmpfile patterns
-               (find /tmp -name 'prefix-*' in cleanup function;
-               verify ry-argparse.* included in _cleanup_tmpfiles)
+       [ ] 320. Credentials erased on every error path
+       [ ] 321. Signal cleanup covers all tmpfile patterns (incl ry-argparse.*)
 
-  13.3 LOGIC CORRECTNESS
-       [ ] 322. DRY-RUN gates: every state-changing call goes through
-               either _run (which has DRY gate) or has explicit
-               DRY=false check. Trace systemctl, pacman, mv, tee.
-               Include do_watch — verify no writes in watch mode.
+  13.3 LOGIC
+       [ ] 322. DRY gates: every state-changing call through _run or explicit
+               DRY check. Include do_watch — no writes in watch mode.
 
   13.4 EDGE CASES
-       [ ] 323. do_watch: terminal resize handled (WATCH_COLS re-read
-               each loop iteration), _WATCH_COLS cleaned up on exit
+       [ ] 323. do_watch: WATCH_COLS re-read each iteration, cleaned on exit
 
-  13.5 LOCK REGRESSION GUARD (v2.8.2)
-       [ ] 324. Trace _acquire_lock: mkdir-only, no flock/exec remnants
-               (see also check 218). Stale reclaim uses find + rmdir +
-               re-mkdir with -- terminators. verify_pid race check present.
+  13.5 LOCK REGRESSION (v2.8.2)
+       [ ] 324. mkdir-only, 0 flock remnants, stale reclaim with --
+               terminators, verify_pid race check present
+
 ═══════════════════════════════════════════════════════════════
- PASS 7: FINALIZE (summary table + spec file + zip)
+ PASS 5: FINALIZE
 ═══════════════════════════════════════════════════════════════
 
-  STEP 1: COLLATE FINDINGS
+STEP 1: COLLATE
 
   ```bash
-  D=/home/claude/audit-data
-  O=/home/claude/audit-findings.txt
-
-  # Verify findings file exists and has content
-  if [ ! -s "$O" ]; then
-    echo "WARNING: No findings recorded" > "$O"
-  fi
-
-  # Count findings by severity
-  echo "=== FINDING COUNTS ==="
+  D=/home/claude/audit-data; O=/home/claude/audit-findings.txt
+  test -s "$O" || echo "WARNING: No findings" > "$O"
   for sev in CRITICAL HIGH MED LOW INFO BUG STYLE; do
     echo "$sev: $(rg -c "^\[$sev\]" "$O" 2>/dev/null || echo 0)"
   done
   echo "TOTAL: $(rg -c '^(F-|\[)' "$O" 2>/dev/null || echo 0)"
   ```
 
-  STEP 2: BUILD SUMMARY TABLE
-
-  Count PASS/FAIL/INFO per phase from the findings file.
-  Use the template from OUTPUT FORMAT below. Write directly
-  to the audit output file.
-
-  STEP 3: BUILD SPEC FILE
-
-  For every finding with severity CRITICAL/HIGH/MED/BUG/STYLE,
-  produce a fix entry with exact Before/After text per the
-  SPEC FILE FORMAT below. LOW/INFO findings go in the separate
-  INFO section.
-
-  STEP 4: PACKAGE DELIVERABLES
-
-  ```bash
-  S=script; V=x.y.z; OUT=/mnt/user-data/outputs
-  cp /home/claude/audit-${S}-${V}.txt /home/claude/fixes-spec-${V}.txt "$OUT/"
-  cd /home/claude && zip "${OUT}/audit-${S}-${V}.zip" audit-${S}-${V}.txt fixes-spec-${V}.txt
-  ```
-
-  STEP 5: VERDICT
-
-  0 actionable → deploy-ready | BUG/STYLE only → fix-required |
-  HIGH/CRITICAL → fix-required (urgent) | Architectural → redesign-needed
-═══════════════════════════════════════════════════════════════
- OUTPUT FORMAT
-═══════════════════════════════════════════════════════════════
-
-SEVERITY TAXONOMY:
-  CRITICAL  — Data loss, security breach, credential exposure
-  HIGH      — Functional bug, wrong exit code, broken mode
-  MED       — Correctness issue, missing validation, edge case
-  LOW       — Style inconsistency, minor deviation from convention
-  INFO      — Observation, no action required
-
-For each finding, record:
-  F-N | Severity (CRITICAL/HIGH/MED/LOW/INFO) | Phase | Checks |
-  Lines | Category (from userPreferences [AUDIT] checklist) |
-  Detail | Fix
-
-Per-finding table: # | Line(s) | Severity | Category | Finding | Fix
-
-Phase summary table:
+STEP 2: SUMMARY TABLE
 
   Phase  | Checks | Pass | Fail | Info
   -------|--------|------|------|-----
@@ -1203,75 +747,66 @@ Phase summary table:
   9      | 15     |      |      |
   10     | 19     |      |      |
   11     | 23     |      |      |
-  12     | 29     |      |      |
+  12     | 30     |      |      |
   13     | 8      |      |      |
-  TOTAL  | 325    |      |      |
-
-Append summary counts by severity after both tables:
+  TOTAL  | 326    |      |      |
 
   CRITICAL: N | HIGH: N | MED: N | LOW: N | INFO: N
 
   Notes:
-  - Checks 232-235: false-positive documentation, always PASS.
-  - Phase 12: REQUIRES fish execution — static analysis insufficient.
-  - Checks 296, 298: --json/--interval/--once without parent mode
-    produce WARN (not exit 2) — verify at runtime.
-  - Check 242: fish redirect regression — RUNTIME only.
-  - Checks 218, 324: lock regression guards — expect 0 flock hits.
-  - Check 325: --profile — [PROFILE] on stderr, NO_COLOR respected.
+  - 232-235: false-positive documentation, always PASS
+  - Phase 12: REQUIRES fish execution
+  - 296, 298: modifier-only → WARN not exit 2, verify at runtime
+  - 242: redirect regression, RUNTIME only
+  - 218, 324: lock regression, expect 0 flock hits
+  - 325: --profile stderr + NO_COLOR
+  - 326: do_watch isatty 1 color guard (v2.8.4 regression)
 
-Final verdict: deploy-ready | fix-required | redesign-needed
+  Verdict: deploy-ready | fix-required | redesign-needed
 
-PARTIAL COMPLETION:
-  If audit cannot complete all phases: save findings so far, mark
-  incomplete phases SKIPPED with reason in summary table, add
-  COVERAGE line (e.g., "12/13 phases, 92%"), still produce spec
-  file for completed findings, set verdict "incomplete — N/13".
-═══════════════════════════════════════════════════════════════
- SPEC FILE OUTPUT (produce after audit completes)
-═══════════════════════════════════════════════════════════════
+  Partial: save findings, mark SKIPPED phases, add COVERAGE line,
+  still produce spec, verdict "incomplete — N/13".
 
-After the audit, produce a SPEC FILE (fixes-spec.txt) that contains
-every actionable finding as a precise, implementable specification.
-This file is the handoff document — another session (or human) must
-be able to apply all fixes using ONLY this spec, without re-reading
-the audit.
+STEP 3: SPEC FILE
 
-SPEC FILE FORMAT:
+  SEVERITY: CRITICAL (data loss/security) | HIGH (functional bug) |
+  MED (correctness) | LOW (style) | INFO (observation)
+
+  Per finding: F-N | Severity | Phase | Checks | Lines | Category | Detail | Fix
 
   ```
-  FIXES SPEC: <script-name> <current-version> → <new-version>
+  FIXES SPEC: <script> <old-ver> → <new-ver>
   Date: YYYY-MM-DD | Findings: N (N CRIT, N HIGH, N MED, N LOW, N INFO)
 
   --- FIX INSTRUCTIONS ---
-
-  F-1  [SEVERITY]  <one-line summary>
-       Checks: N,N  Lines: N,N  Category: <from checklist>
-       Before: <exact text — copy-pasteable>
-       After:  <exact replacement text>
-       Verify: <command to confirm fix>
+  F-1  [SEV]  <summary>
+       Checks: N,N  Lines: N,N  Category: <checklist item>
+       Before: <exact text>
+       After:  <exact replacement>
+       Verify: <command>
 
   --- INFO (no action) ---
-
-  I-1  [INFO]  <description>  Checks: N  Lines: N
+  I-1  [INFO]  <desc>  Checks: N  Lines: N
 
   --- VERSION ---
-
   Bump: <old> → <new>
-  Changelog: v<new> <one-line summary of all fixes>.
+  Changelog: v<new> <summary>.
 
   --- VERIFICATION ---
-
   1. fish --no-execute script.fish
   2. rg '<old-version>' script.fish README.md  (expect 0)
   3. rg '<new-version>' script.fish README.md  (expect N)
   ```
 
-SPEC RULES: Before/After must be exact (copy-pasteable). Spec is
-self-contained — no references to audit doc. Version bump always
-included if any actionable fixes exist. INFO findings listed
-separately marked "no action required".
+  Before/After must be exact. Spec self-contained. Version bump if any
+  actionable fixes. INFO listed separately.
 
-DELIVERABLES (zip together):
-  1. audit-<script>-<version>.txt   — full audit with all 325 checks
-  2. fixes-spec-<version>.txt       — spec file for all fixes
+STEP 4: PACKAGE
+
+  ```bash
+  S=script; V=x.y.z; OUT=/mnt/user-data/outputs
+  cp /home/claude/audit-${S}-${V}.txt /home/claude/fixes-spec-${V}.txt "$OUT/"
+  cd /home/claude && zip "${OUT}/audit-${S}-${V}.zip" audit-${S}-${V}.txt fixes-spec-${V}.txt
+  ```
+
+DELIVERABLES: audit-<script>-<version>.txt + fixes-spec-<version>.txt (zipped)
