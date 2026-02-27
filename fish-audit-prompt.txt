@@ -1,19 +1,26 @@
 FISH SHELL SCRIPT AUDIT PROMPT
 ===============================
-Version: 7.1.0
-Derived from: ry-install.fish v3.0.0 audit (2026-02-27)
-Changed: 7.1.0 Sync v2.8.9→v3.0.0: fish_indent canonical formatting;
+Version: 8.0.0
+Derived from: ry-install.fish v3.1.0 audit (2026-02-27)
+Changed: 8.0.0 Sync v3.0.0→v3.1.0: KVER globals; _ntsync_state helper (5
+               states); _verify_unit_syntax, _check_service_active_enabled,
+               _find_pacnew_files, _get_boot_time helpers; modules-load.d
+               removed (17→16 files); sp5100_tco/btusb removed; kernel params
+               19→18; power-profiles-daemon MASK not DEL; --existence-only
+               hook validation; 11 new checks (327-337); #143 repurposed as
+               regression. 337 checks (was 326).
+         7.1.0 Sync v2.8.9→v3.0.0: fish_indent canonical formatting;
                README structured tables; changelog kernel.org style.
          7.0.0 Sync v2.8.3→v2.8.9: isatty 1 guard in do_watch (v2.8.4);
                comment/README trimming (v2.8.5-v2.8.9); 326 checks (was 325).
                Rewrite: consolidate passes, trim setup/explanations (~55% smaller).
          (Full history: 3.3.0→6.0.0 in git)
-Checks: 326
-Phases: 13 (11 static + 1 runtime + 1 gap analysis)
+Checks: 337
+Phases: 14 (11 static + 1 runtime + 1 gap analysis + 1 v3.1.0 specifics)
 
 PURPOSE
 -------
-326-check audit for production fish scripts managing system config,
+337-check audit for production fish scripts managing system config,
 sudo, credentials, embedded configs, and multi-mode dispatch with
 backup/verification subsystems.
 
@@ -31,6 +38,10 @@ KEY LESSONS (encoded as checks):
   - --watch --once tty gate relaxation → 314-316
   - --profile stderr + NO_COLOR → 325
   - do_watch isatty 1 color guard (v2.8.4) → 326
+  - KVER globals centralize kernel version parsing → 327
+  - _ntsync_state return-value function (stdout contract) → 328
+  - Helper dedup: consolidated helpers replace inline code → 333
+  - Removed features need regression checks → 334-336
 
 ───────────────────────────────────────────────────────────────
  SETUP
@@ -92,11 +103,11 @@ RULES: Work continuously. Batch tool calls. Parallel when independent.
   Write findings: echo "F-N ..." >> /home/claude/audit-findings.txt
 
 ORDER:
-  PASS 1 — DATA GATHER    phases 1-11  (compound parallel commands)
-  PASS 2 — STATIC         phases 1-11  (analyze gathered data)
-  PASS 3 — RUNTIME        phase 12     (fish execution tests)
-  PASS 4 — GAP ANALYSIS   phase 13     (race/error/edge tracing)
-  PASS 5 — FINALIZE       —            (summary + spec + zip)
+  PASS 1 — DATA GATHER    phases 1-11,14  (compound parallel commands)
+  PASS 2 — STATIC         phases 1-11,14  (analyze gathered data)
+  PASS 3 — RUNTIME        phase 12        (fish execution tests)
+  PASS 4 — GAP ANALYSIS   phase 13        (race/error/edge tracing)
+  PASS 5 — FINALIZE       —               (summary + spec + zip)
 
 PASS 1: DATA GATHERING (single compound block)
 
@@ -129,13 +140,13 @@ PASS 1: DATA GATHERING (single compound block)
 
   # P6-7: embedded configs, cross-refs
   (
-    echo "=== CONFIG FORMATS ===" && rg -n '\\[Unit\\]|\\[Service\\]|\\[Install\\]' "$F"
+    echo "=== CONFIG FORMATS ===" && rg -n '\[Unit\]|\[Service\]|\[Install\]' "$F"
     echo "=== SYSTEMD ===" && rg -n 'ExecStart|After=|Type=' "$F"
     echo "=== UDEV ===" && rg -n 'ACTION==|SUBSYSTEM==|ATTR{' "$F"
     echo "=== DESTINATIONS ===" && rg -n 'SERVICE_DESTINATIONS|amdgpu-performance|cpupower-epp' "$F"
     echo "=== SDBOOT ===" && rg -n 'LINUX_FALLBACK_OPTIONS|SDBOOT' "$F"
     echo "=== VERSION ===" && rg -n 'VERSION|SYSTEM_DEST|USER_DEST|SERVICE_DEST|get_file_content|MASK' "$F"
-    echo "=== DISPATCH ===" && rg -n 'do_\w+ \$\|do_\w+ "\$' "$F" | rg -v 'function |#|_log'
+    echo "=== DISPATCH ===" && rg -n 'do_\w+ \$|do_\w+ "\$' "$F" | rg -v 'function |#|_log'
     echo "=== WATCH ===" && rg -n 'WATCH_INTERVAL|WATCH_ONCE|do_watch|--watch|--once' "$F"
     echo "=== PROFILE ===" && rg -n 'PROFILE|profile' "$F"
   ) > "$D/p6-7.txt" 2>&1 &
@@ -158,6 +169,24 @@ PASS 1: DATA GATHERING (single compound block)
     echo "=== ROLLBACK ===" && rg -n 'rollback|undo|revert|restore|_backup' "$F"
     echo "=== PRE-LOCK ===" && rg -n 'case install-file|case install|_acquire_lock' "$F"
   ) > "$D/p8-11.txt" 2>&1 &
+
+  # P14: v3.1.0 helpers, regressions
+  (
+    echo "=== KVER GLOBALS ===" && rg -n 'KVER|KVER_MAJOR|KVER_MINOR' "$F"
+    echo "=== _ntsync_state ===" && rg -n '_ntsync_state' "$F"
+    echo "=== _verify_unit_syntax ===" && rg -n '_verify_unit_syntax' "$F"
+    echo "=== _check_service_active ===" && rg -n '_check_service_active' "$F"
+    echo "=== _find_pacnew ===" && rg -n '_find_pacnew' "$F"
+    echo "=== _get_boot_time ===" && rg -n '_get_boot_time' "$F"
+    echo "=== EXISTENCE_ONLY ===" && rg -n 'existence.only' "$F"
+    echo "=== MODULES-LOAD REGRESSION ===" && rg -n 'modules-load' "$F"
+    echo "=== SP5100_TCO REGRESSION ===" && rg -ni 'sp5100' "$F"
+    echo "=== BTUSB REGRESSION ===" && rg -ni 'btusb|enable_autosuspend' "$F"
+    echo "=== PPD REGRESSION ===" && rg -n 'power-profiles-daemon' "$F"
+    echo "=== MODPROBE_BLACKLIST ===" && rg -n 'MODPROBE_BLACKLIST' "$F"
+    echo "=== HELPER BODIES ===" && rg -n '^function _ntsync_state|^function _verify_unit|^function _check_service|^function _find_pacnew|^function _get_boot_time' "$F"
+    echo "=== UNAME INLINE ===" && rg -n 'uname -r' "$F" | rg -v 'KVER|#'
+  ) > "$D/p14.txt" 2>&1 &
 
   wait
   wc -l "$D"/*.txt
@@ -188,7 +217,10 @@ PASS 3: RUNTIME (phase 12)
     "--diagnose --json" "--json" "--watch" "--watch --once" \
     "--no-log --version" "--no-log --lint" \
     "--diff /etc/kernel/cmdline" "--diff relative/path" \
-    "--profile --dry-run"; do
+    "--profile --dry-run" \
+    "--dry-run" "-n" "--all --dry-run" "-a --dry-run" \
+    "--verbose --dry-run" "-V --dry-run" "--force --dry-run" "-f --dry-run" \
+    "--no-color --dry-run"; do
     fish "$S" $mode >/dev/null 2>&1
     printf '%s → %d\n' "$mode" "$?" >> "$D/exit-codes.txt"
   done
@@ -206,7 +238,7 @@ PASS 3: RUNTIME (phase 12)
   printf '--watch non-tty → %d\n' "$?" >> "$D/exit-codes.txt"
 
   # NO_COLOR enforcement
-  for mode in "--lint" "--diff" "--dry-run" "--diagnose" "--logs list"; do
+  for mode in "--lint" "--diff" "--dry-run" "--diagnose" "--logs list" "--watch --once"; do
     NO_COLOR=1 fish "$S" $mode --no-color 2>"$D/nocolor-$mode.txt" >/dev/null &
   done
   wait
@@ -270,6 +302,11 @@ PASS 4: GAP ANALYSIS (phase 13)
   rg -oP '(?:sudo\s+)?(?:command\s+)?\b(pacman|systemctl|mkinitcpio|modprobe|udevadm|systemd-analyze|journalctl|findmnt|lsblk|ip|tee|install|mkdir|chmod|chown|mv|cp|rm|cat|sort|wc|diff|date|sleep|kill|pkill|stat|head|tail|cut|tr|awk|sed|grep|find|mktemp|read)\b' "$F" | sort -u > "$D/gap-ext-cmds.txt"
   rg -oP 'command -q\s+(\w+)' "$F" | sort -u > "$D/gap-cmd-checks.txt"
   echo "=== Unchecked commands ===" && comm -23 "$D/gap-ext-cmds.txt" "$D/gap-cmd-checks.txt"
+
+  # Helper dedup regression (v3.1.0: no stale inline versions)
+  echo "=== INLINE UNAME (expect 0 outside KVER init) ===" && rg -n 'uname -r' "$F" | rg -v 'KVER|#'
+  echo "=== INLINE PACNEW FIND (expect 0 outside _find_pacnew) ===" && rg -n "sudo find.*/etc.*/boot.*pacnew" "$F" | rg -v '_find_pacnew_files'
+  echo "=== INLINE BOOT TIME (expect 0 outside _get_boot_time) ===" && rg -n 'systemd-analyze.*head' "$F" | rg -v '_get_boot_time'
 
   wc -l "$D"/gap-*.txt
   ```
@@ -416,7 +453,7 @@ PASS 4: GAP ANALYSIS (phase 13)
  PHASE 6: EMBEDDED CONFIG CONTENT (47 checks)
 ═══════════════════════════════════════════════════════════════
 
-  3 arrays: SYSTEM (12), USER (3), SERVICE (2) = 17 files.
+  3 arrays: SYSTEM (11), USER (3), SERVICE (2) = 16 files.
 
   6.1  SYSTEMD-BOOT
        [ ] 123. key<space>value (no =)  [ ] 124. Valid keys only
@@ -440,8 +477,11 @@ PASS 4: GAP ANALYSIS (phase 13)
        [ ] 139. No "options" lines (regression)  [ ] 140. blacklist format
        [ ] 141. Modules validated  [ ] 142. Cross-ref with cmdline
 
-  6.6  MODULES-LOAD
-       [ ] 143. One module per line, no options
+  6.6  MODULES-LOAD REGRESSION (v3.1.0)
+       [ ] 143. No modules-load.d destinations, no dead code paths.
+               CachyOS vendor ships /usr/lib/modules-load.d/ntsync.conf.
+               Expect: 0 hits for modules-load.d in DESTINATIONS arrays.
+               Expect: only comment references (no functional code).
 
   6.7  UDEV
        [ ] 144. == for match  [ ] 145. = for assign
@@ -632,7 +672,7 @@ PASS 4: GAP ANALYSIS (phase 13)
        [ ] 287. Backup before overwrite  [ ] 288. Recovery documented
 
 ═══════════════════════════════════════════════════════════════
- PHASE 12: RUNTIME EXECUTION (29 checks)
+ PHASE 12: RUNTIME EXECUTION (30 checks)
 ═══════════════════════════════════════════════════════════════
 
   Prerequisite: fish installed. Use PASS 3 harness above.
@@ -645,7 +685,8 @@ PASS 4: GAP ANALYSIS (phase 13)
 
   12.2 EXIT CODE MATRIX
        [ ] 293. 0: --help, -h, --version, -v, --lint, --completions,
-               --test-all, --logs list/system, --profile
+               --test-all, --logs list/system, --dry-run, -n,
+               --profile --dry-run
        [ ] 294. 2: invalid flag, conflicts, modifier-only (--fix/--stress
                /--once alone), bad --interval, --install-file no path,
                --diff relative/path
@@ -718,6 +759,61 @@ PASS 4: GAP ANALYSIS (phase 13)
                terminators, verify_pid race check present
 
 ═══════════════════════════════════════════════════════════════
+ PHASE 14: v3.1.0 HELPERS & REGRESSIONS (11 checks)
+═══════════════════════════════════════════════════════════════
+
+  Use PASS 1 P14 data. Verify new helpers and removed-feature regressions.
+
+  14.1 KVER GLOBALS
+       [ ] 327. KVER, KVER_MAJOR, KVER_MINOR initialized at top level
+               BEFORE _ntsync_state or any kernel-version-dependent code.
+               Parse validation: non-numeric fallback to 0.
+               Regression: 0 inline uname -r calls outside KVER init.
+
+  14.2 RETURN-VALUE HELPERS (stdout contract)
+       [ ] 328. _ntsync_state: returns exactly one of 5 states via stdout
+               (unavailable|builtin|loaded|loaded_nodev|missing). All 6+
+               callers capture into local via set -l _ns (_ntsync_state).
+               No stderr output.
+       [ ] 329. _get_boot_time: returns seconds (float) via stdout, or
+               return 1. Callers capture and check $status. No stderr.
+       [ ] 330. _find_pacnew_files: returns file paths via stdout. Callers
+               capture into list. No stale inline sudo find calls remain.
+
+  14.3 VERIFICATION HELPERS
+       [ ] 331. _verify_unit_syntax: --user auto-detect via path match
+               '*/.config/systemd/user/*'. Passes $user_flag to
+               systemd-analyze verify. Handles missing systemd-analyze
+               with _warn + return 0.
+       [ ] 332. _check_service_active_enabled: checks both is-active AND
+               is-enabled. Handles not-installed (file missing) with _warn.
+               Callers: amdgpu-performance.service, cpupower-epp.service.
+
+  14.4 HELPER DEDUPLICATION
+       [ ] 333. No orphaned inline versions of consolidated helpers:
+               - 0 inline uname -r (outside KVER init + comments)
+               - 0 inline sudo find pacnew (outside _find_pacnew_files)
+               - 0 inline systemd-analyze head (outside _get_boot_time)
+               - 0 NTSYNC_SUPPORTED global remnants
+
+  14.5 REMOVED-FEATURE REGRESSIONS
+       [ ] 334. sp5100_tco: not in MODPROBE_BLACKLIST. CachyOS vendor
+               blacklist + nowatchdog cmdline handle it.
+               rg -i 'sp5100' → 0 hits (or comment-only).
+       [ ] 335. btusb: no btusb.enable_autosuspend cmdline param, no USB
+               udev ACTION=="bind" rule for btusb, no btusb sysfs verify.
+               usbcore.autosuspend=-1 handles globally.
+               rg -i 'btusb|enable_autosuspend' → 0 hits (or comment-only).
+       [ ] 336. power-profiles-daemon: in MASK array, NOT in PKGS_DEL.
+               Prevents dependency reinstallation conflicts.
+
+  14.6 HOOK VALIDATION
+       [ ] 337. validate_mkinitcpio_hooks --existence-only flag: verify_static
+               passes --existence-only when checking installed mkinitcpio.conf.
+               Flag skips order checking and only confirms hook existence.
+               Full order validation used only for embedded content.
+
+═══════════════════════════════════════════════════════════════
  PASS 5: FINALIZE
 ═══════════════════════════════════════════════════════════════
 
@@ -749,7 +845,8 @@ STEP 2: SUMMARY TABLE
   11     | 23     |      |      |
   12     | 30     |      |      |
   13     | 8      |      |      |
-  TOTAL  | 326    |      |      |
+  14     | 11     |      |      |
+  TOTAL  | 337    |      |      |
 
   CRITICAL: N | HIGH: N | MED: N | LOW: N | INFO: N
 
@@ -761,11 +858,17 @@ STEP 2: SUMMARY TABLE
   - 218, 324: lock regression, expect 0 flock hits
   - 325: --profile stderr + NO_COLOR
   - 326: do_watch isatty 1 color guard (v2.8.4 regression)
+  - 143: modules-load.d removal regression (v3.1.0)
+  - 327: KVER globals, expect 0 inline uname -r outside init
+  - 328-330: return-value helpers, stdout contracts
+  - 333: helper dedup, expect 0 orphaned inline versions
+  - 334-336: removed-feature regressions (sp5100_tco, btusb, ppd)
+  - 337: --existence-only hook validation split
 
   Verdict: deploy-ready | fix-required | redesign-needed
 
   Partial: save findings, mark SKIPPED phases, add COVERAGE line,
-  still produce spec, verdict "incomplete — N/13".
+  still produce spec, verdict "incomplete — N/14".
 
 STEP 3: SPEC FILE
 
