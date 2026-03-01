@@ -1,8 +1,43 @@
 FISH SHELL SCRIPT AUDIT PROMPT
 ===============================
-Version: 8.0.0
-Derived from: ry-install.fish v3.1.0 audit (2026-02-27)
-Changed: 8.0.0 Sync v3.0.0→v3.1.0: KVER globals; _ntsync_state helper (5
+Version: 11.0.1
+Derived from: ry-install.fish v3.2.5 audit (2026-02-28)
+Changed: 11.0.1 Fix check 358 caller attribution (verify_runtime, not
+               verify_static). Add PASS 4 gap traces for checks 363-365
+               (dotfile glob, timestamp cache, string match separator
+               regressions). Add -a --dry-run to check 293 exit 0 list.
+               Add NO_COLOR loop comment re --diagnose --gaming.
+         11.0.0 Sync v3.2.3→v3.2.5: SIGPIPE handler (_cleanup_pipe,
+               exit 141, no stderr on broken pipe); _validate_kernel_params
+               (cmdline vs /proc/config.gz CONFIG_ symbols); _preflight_boot
+               _sanity (vmlinuz, initramfs, boot entry gate); _gather_temps
+               sysfs rewrite (removes lm_sensors runtime dep); _diagnose
+               _gaming extracted behind --gaming flag (--all auto-enables);
+               dead global removal (MODULES_LOAD, _LOCK_METHOD); do_clean
+               dotfile fix (find -mindepth 1 replaces glob); _log timestamp
+               cache removed (direct date); string match -- separator fix in
+               verify_runtime cmdline check. Phase 3: +1 check (314). Phase
+               14: +9 checks (357-365). 362 checks (was 352).
+         10.0.0 Sync v3.2.1→v3.2.3: footer double-write race fix
+               (_FOOTER_WRITTEN before printf); log rotation race fix
+               (_has_lock gate, write modes only); LC_ALL=C on backup
+               and log rotation sorts; orphan log cleanup on 3 early
+               exit paths (v3.2.2); --no-log orphan cleanup in signal/
+               fish_exit handlers (v3.2.2). Fix header check count
+               (was 350, actual 346 due to gaps 194/314-316).
+               Phase 14: +6 checks (351-356). 352 checks (was 346).
+         9.0.0 Sync v3.1.0→v3.2.1: /etc/sysctl.d/99-ry-sysctl.conf added,
+         --json and --once flags removed
+               (BBR+fq, tcp_fastopen=3, inotify); embedded files 16→17,
+               system destinations 11→12; verify_static sysctl (4 _chk_grep);
+               verify_runtime sysctl (/proc/sys reads); do_diagnose Sysctl
+               Tuning section; sysctl --system reload in _install_configure
+               and do_install_file; _install_finalize INSTALL_HAD_ERRORS
+               propagation (v3.1.4); cat -- fixes (v3.1.4); --description
+               on 77 functions (v3.1.2); 71 inline comments (v3.1.3).
+               Phase 6: +3 checks (338-340); Phase 14: +10 checks (341-350).
+               350 checks (was 337).
+         8.0.0 Sync v3.0.0→v3.1.0: KVER globals; _ntsync_state helper (5
                states); _verify_unit_syntax, _check_service_active_enabled,
                _find_pacnew_files, _get_boot_time helpers; modules-load.d
                removed (17→16 files); sp5100_tco/btusb removed; kernel params
@@ -15,12 +50,12 @@ Changed: 8.0.0 Sync v3.0.0→v3.1.0: KVER globals; _ntsync_state helper (5
                comment/README trimming (v2.8.5-v2.8.9); 326 checks (was 325).
                Rewrite: consolidate passes, trim setup/explanations (~55% smaller).
          (Full history: 3.3.0→6.0.0 in git)
-Checks: 337
-Phases: 14 (11 static + 1 runtime + 1 gap analysis + 1 v3.1.0 specifics)
+Checks: 362
+Phases: 14 (11 static + 1 runtime + 1 gap analysis + 1 v3.1.0–v3.2.5 specifics)
 
 PURPOSE
 -------
-337-check audit for production fish scripts managing system config,
+362-check audit for production fish scripts managing system config,
 sudo, credentials, embedded configs, and multi-mode dispatch with
 backup/verification subsystems.
 
@@ -35,13 +70,24 @@ KEY LESSONS (encoded as checks):
   - Dispatch args quoted → 231
   - Named constants for all thresholds → 247-258
   - check_deps matches actual usage → 272
-  - --watch --once tty gate relaxation → 314-316
   - --profile stderr + NO_COLOR → 325
   - do_watch isatty 1 color guard (v2.8.4) → 326
   - KVER globals centralize kernel version parsing → 327
   - _ntsync_state return-value function (stdout contract) → 328
   - Helper dedup: consolidated helpers replace inline code → 333
   - Removed features need regression checks → 334-336
+  - sysctl.d complements vendor config without overlap → 340, 341
+  - INSTALL_HAD_ERRORS must propagate to caller → 347
+  - Footer flag-before-write prevents signal race → 353
+  - Log rotation under lock prevents concurrent race → 354
+  - LC_ALL=C on date-sorted filenames prevents locale bugs → 355, 356
+  - Orphan log cleanup on every early exit path → 351, 352
+  - SIGPIPE needs dedicated handler; Fish does not auto-ignore → 314, 357
+  - Validate cmdline params against compiled kernel config → 358
+  - Boot sanity gate prevents unbootable system after rebuild → 359
+  - sysfs direct reads avoid forking external tools → 360
+  - Extract optional diagnostics behind feature flags → 361
+  - Dead globals are regression vectors → 362
 
 ───────────────────────────────────────────────────────────────
  SETUP
@@ -147,8 +193,9 @@ PASS 1: DATA GATHERING (single compound block)
     echo "=== SDBOOT ===" && rg -n 'LINUX_FALLBACK_OPTIONS|SDBOOT' "$F"
     echo "=== VERSION ===" && rg -n 'VERSION|SYSTEM_DEST|USER_DEST|SERVICE_DEST|get_file_content|MASK' "$F"
     echo "=== DISPATCH ===" && rg -n 'do_\w+ \$|do_\w+ "\$' "$F" | rg -v 'function |#|_log'
-    echo "=== WATCH ===" && rg -n 'WATCH_INTERVAL|WATCH_ONCE|do_watch|--watch|--once' "$F"
+    echo "=== WATCH ===" && rg -n 'WATCH_INTERVAL|do_watch|--watch' "$F"
     echo "=== PROFILE ===" && rg -n 'PROFILE|profile' "$F"
+    echo "=== SYSCTL ===" && rg -n 'sysctl|BBR|tcp_fastopen|default_qdisc|inotify' "$F"
   ) > "$D/p6-7.txt" 2>&1 &
 
   # P8-11: architecture, patterns, docs, testing
@@ -170,7 +217,7 @@ PASS 1: DATA GATHERING (single compound block)
     echo "=== PRE-LOCK ===" && rg -n 'case install-file|case install|_acquire_lock' "$F"
   ) > "$D/p8-11.txt" 2>&1 &
 
-  # P14: v3.1.0 helpers, regressions
+  # P14: v3.1.0–v3.2.5 helpers, regressions, sysctl, race fixes, SIGPIPE, boot sanity
   (
     echo "=== KVER GLOBALS ===" && rg -n 'KVER|KVER_MAJOR|KVER_MINOR' "$F"
     echo "=== _ntsync_state ===" && rg -n '_ntsync_state' "$F"
@@ -186,6 +233,31 @@ PASS 1: DATA GATHERING (single compound block)
     echo "=== MODPROBE_BLACKLIST ===" && rg -n 'MODPROBE_BLACKLIST' "$F"
     echo "=== HELPER BODIES ===" && rg -n '^function _ntsync_state|^function _verify_unit|^function _check_service|^function _find_pacnew|^function _get_boot_time' "$F"
     echo "=== UNAME INLINE ===" && rg -n 'uname -r' "$F" | rg -v 'KVER|#'
+    echo "=== SYSCTL DEST ===" && rg -n 'sysctl.d' "$F"
+    echo "=== SYSCTL CONTENT ===" && rg -n 'default_qdisc|tcp_congestion|tcp_fastopen|max_user_watches' "$F"
+    echo "=== SYSCTL RELOAD ===" && rg -n 'sysctl --system' "$F"
+    echo "=== SYSCTL VERIFY ===" && rg -n '_chk_grep.*/etc/sysctl' "$F"
+    echo "=== SYSCTL RUNTIME ===" && rg -n '/proc/sys/' "$F"
+    echo "=== SYSCTL DIAGNOSE ===" && rg -n '_diag_sysctl|Sysctl Tuning' "$F"
+    echo "=== INSTALL_HAD_ERRORS ===" && rg -n 'INSTALL_HAD_ERRORS' "$F"
+    echo "=== CAT TERMINATOR ===" && rg -n 'cat --' "$F" | head -20
+    echo "=== FUNCTION DESCRIPTIONS ===" && rg -c -- '--description' "$F"
+    echo "=== FUNCTION COUNT ===" && rg -c '^function ' "$F"
+    echo "=== VENDOR OVERLAP ===" && rg -n '70-cachyos-settings' "$F"
+    echo "=== FOOTER RACE ===" && rg -n '_FOOTER_WRITTEN' "$F"
+    echo "=== LOG ROTATION LOCK ===" && rg -n '_has_lock|Log rotation' "$F"
+    echo "=== LC_ALL SORT ===" && rg -n 'LC_ALL=C sort' "$F"
+    echo "=== ORPHAN LOG ===" && rg -n 'LOG_FILE.*rm|rm.*LOG_FILE|install-.*jsonl' "$F" | head -20
+    echo "=== EARLY EXIT LOG ===" && rg -n 'exit 2' "$F" | head -20
+    echo "=== SIGPIPE HANDLER ===" && rg -n '_cleanup_pipe|SIGPIPE|on-signal PIPE|exit 141' "$F"
+    echo "=== VALIDATE KERNEL PARAMS ===" && rg -n '_validate_kernel_params|param_config_map|/proc/config.gz' "$F"
+    echo "=== BOOT SANITY ===" && rg -n '_preflight_boot_sanity|vmlinuz|initramfs.*non.zero' "$F"
+    echo "=== GATHER TEMPS ===" && rg -n '_gather_temps|lm_sensors' "$F"
+    echo "=== GAMING FLAG ===" && rg -n 'GAMING|--gaming|_diagnose_gaming' "$F"
+    echo "=== DEAD GLOBALS ===" && rg -n 'MODULES_LOAD|_LOCK_METHOD' "$F"
+    echo "=== DOTFILE CLEAN ===" && rg -n 'mindepth 1.*exec|find.*mindepth.*rm' "$F"
+    echo "=== LOG TIMESTAMP ===" && rg -n '_TS_CACHE|/proc/uptime' "$F"
+    echo "=== STRING MATCH SEPARATOR ===" && rg -n "string match.*' -- '" "$F"
   ) > "$D/p14.txt" 2>&1 &
 
   wait
@@ -208,19 +280,22 @@ PASS 3: RUNTIME (phase 12)
 
   # exit code matrix
   for mode in \
-    "--help" "-h" "--version" "-v" "--bogus" "--fix" "--stress" "--json" \
+    "--help" "-h" "--version" "-v" "--bogus" "--fix" "--stress" \
     "--diff --lint" "--interval" "--interval abc" "--interval 0" "--interval -5" \
-    "--once" "--verify-static" "--verify-runtime" "--lint" "--test-all" \
+    "--verify-static" "--verify-runtime" "--lint" "--test-all" \
     "--clean --dry-run" "--completions" "--diff" "--diagnose" \
     "--install-file" "--install-file /etc/kernel/cmdline --dry-run" \
     "--logs" "--logs list" "--logs system" "--logs analyze" \
-    "--diagnose --json" "--json" "--watch" "--watch --once" \
+    "--watch" \
     "--no-log --version" "--no-log --lint" \
     "--diff /etc/kernel/cmdline" "--diff relative/path" \
+    "--diff /etc/sysctl.d/99-ry-sysctl.conf" \
     "--profile --dry-run" \
     "--dry-run" "-n" "--all --dry-run" "-a --dry-run" \
     "--verbose --dry-run" "-V --dry-run" "--force --dry-run" "-f --dry-run" \
-    "--no-color --dry-run"; do
+    "--no-color --dry-run" \
+    "--gaming" "--diagnose --gaming" "--diagnose --gaming --dry-run" \
+    "--all --diagnose --dry-run"; do
     fish "$S" $mode >/dev/null 2>&1
     printf '%s → %d\n' "$mode" "$?" >> "$D/exit-codes.txt"
   done
@@ -229,16 +304,16 @@ PASS 3: RUNTIME (phase 12)
   fish "$S" --dry-run --profile --no-color >"$D/profile-out.txt" 2>"$D/profile-err.txt"
   fish "$S" --dry-run --no-color >"$D/noprofile-out.txt" 2>"$D/noprofile-err.txt"
 
-  # --watch --once non-tty
-  echo "" | fish "$S" --watch --once >"$D/once-notty-out.txt" 2>"$D/once-notty-err.txt"
-  printf '--watch --once non-tty → %d\n' "$?" >> "$D/exit-codes.txt"
-
-  # --watch non-tty without --once (expect exit 1)
+  # --watch non-tty (expect exit 1)
   echo "" | fish "$S" --watch >"$D/watch-notty-out.txt" 2>"$D/watch-notty-err.txt"
   printf '--watch non-tty → %d\n' "$?" >> "$D/exit-codes.txt"
 
-  # NO_COLOR enforcement
-  for mode in "--lint" "--diff" "--dry-run" "--diagnose" "--logs list" "--watch --once"; do
+  # SIGPIPE handling (expect exit 141)
+  fish "$S" --lint 2>&1 | head -1 >/dev/null 2>&1
+  printf '--lint|head -1 → %d\n' "${PIPESTATUS[0]}" >> "$D/exit-codes.txt"
+
+  # NO_COLOR enforcement (--diagnose --gaming runs real checks; acceptable on audit container)
+  for mode in "--lint" "--diff" "--dry-run" "--diagnose" "--logs list" "--diagnose --gaming"; do
     NO_COLOR=1 fish "$S" $mode --no-color 2>"$D/nocolor-$mode.txt" >/dev/null &
   done
   wait
@@ -260,6 +335,14 @@ PASS 3: RUNTIME (phase 12)
     echo "result: [$result]"
   ' >"$D/redirect-out.txt" 2>"$D/redirect-err.txt"
 
+  # --help exit code coverage (must document 141)
+  rg '141' "$D/help-out.txt" > "$D/help-141.txt" 2>/dev/null
+
+  # --gaming flag validation
+  fish "$S" --gaming 2>"$D/gaming-alone-err.txt" >/dev/null
+  printf '--gaming alone → %d\n' "$?" >> "$D/exit-codes.txt"
+  rg -i 'warn|ignor' "$D/gaming-alone-err.txt" > "$D/gaming-warn.txt" 2>/dev/null
+
   # Analyze
   echo "=== STDERR BYTES (expect 0 for help/version) ===" && wc -c "$D"/{help,h,ver,v}-err.txt
   echo "=== EXIT CODES ===" && bat --plain "$D/exit-codes.txt"
@@ -268,10 +351,11 @@ PASS 3: RUNTIME (phase 12)
   echo "=== LINT ===" && bat --plain "$D/lint-err.txt"
   echo "=== NO-LOG (expect empty) ===" && bat --plain "$D/nolog-check.txt"
   echo "=== WATCH NON-TTY ===" && bat --plain "$D/watch-notty-err.txt"
-  echo "=== WATCH --ONCE ===" && wc -c "$D/once-notty-err.txt" && bat --plain "$D/once-notty-out.txt" | head -5
   echo "=== REDIRECT ===" && bat --plain "$D/redirect-err.txt"
   echo "=== PROFILE ===" && rg -c '\[PROFILE\]' "$D/profile-err.txt" 2>/dev/null || echo "0"
   echo "=== NO PROFILE (expect 0) ===" && rg -c '\[PROFILE\]' "$D/noprofile-err.txt" 2>/dev/null || echo "0"
+  echo "=== HELP 141 (expect 1 hit) ===" && bat --plain "$D/help-141.txt"
+  echo "=== GAMING WARN ===" && bat --plain "$D/gaming-warn.txt"
   ```
 
 PASS 4: GAP ANALYSIS (phase 13)
@@ -298,21 +382,51 @@ PASS 4: GAP ANALYSIS (phase 13)
   # Argparse temp lifecycle
   rg -n 'ry-argparse|_argparse_tmp' "$F" > "$D/gap-argparse.txt"
 
-  # Ext command coverage
-  rg -oP '(?:sudo\s+)?(?:command\s+)?\b(pacman|systemctl|mkinitcpio|modprobe|udevadm|systemd-analyze|journalctl|findmnt|lsblk|ip|tee|install|mkdir|chmod|chown|mv|cp|rm|cat|sort|wc|diff|date|sleep|kill|pkill|stat|head|tail|cut|tr|awk|sed|grep|find|mktemp|read)\b' "$F" | sort -u > "$D/gap-ext-cmds.txt"
-  rg -oP 'command -q\s+(\w+)' "$F" | sort -u > "$D/gap-cmd-checks.txt"
-  echo "=== Unchecked commands ===" && comm -23 "$D/gap-ext-cmds.txt" "$D/gap-cmd-checks.txt"
+  # sysctl reload coverage
+  rg -n 'sysctl --system' "$F" > "$D/gap-sysctl-reload.txt"
 
-  # Helper dedup regression (v3.1.0: no stale inline versions)
-  echo "=== INLINE UNAME (expect 0 outside KVER init) ===" && rg -n 'uname -r' "$F" | rg -v 'KVER|#'
-  echo "=== INLINE PACNEW FIND (expect 0 outside _find_pacnew) ===" && rg -n "sudo find.*/etc.*/boot.*pacnew" "$F" | rg -v '_find_pacnew_files'
-  echo "=== INLINE BOOT TIME (expect 0 outside _get_boot_time) ===" && rg -n 'systemd-analyze.*head' "$F" | rg -v '_get_boot_time'
+  # INSTALL_HAD_ERRORS propagation
+  rg -n 'INSTALL_HAD_ERRORS' "$F" > "$D/gap-install-errors.txt"
+
+  # Footer race: flag must be BEFORE printf
+  rg -n '_FOOTER_WRITTEN' "$F" > "$D/gap-footer-race.txt"
+
+  # Log rotation lock gate
+  rg -n '_has_lock' "$F" > "$D/gap-rotation-lock.txt"
+
+  # LC_ALL=C sort for date-ordered files
+  rg -n 'sort' "$F" | rg -v '#|sort -' > "$D/gap-sort-locale.txt"
+
+  # SIGPIPE cleanup completeness: _cleanup_pipe must call _do_cleanup
+  rg -A 15 '^function _cleanup_pipe' "$F" > "$D/gap-sigpipe.txt"
+
+  # Boot sanity gate: called after rebuild, before declaring success
+  rg -n '_preflight_boot_sanity' "$F" > "$D/gap-boot-sanity.txt"
+
+  # _validate_kernel_params: called in verify flow
+  rg -n '_validate_kernel_params' "$F" > "$D/gap-validate-kernel.txt"
+
+  # Dead global regression (expect 0 hits)
+  rg -n 'MODULES_LOAD\b|_LOCK_METHOD\b' "$F" > "$D/gap-dead-globals.txt"
+
+  # Dotfile glob regression (expect 0 rm -rf "$d"/* in do_clean)
+  rg -n 'rm -rf.*\*' "$F" | rg -v '#' > "$D/gap-dotfile-glob.txt"
+
+  # Timestamp cache regression (expect 0 hits)
+  rg -n '_TS_CACHE|/proc/uptime' "$F" > "$D/gap-ts-cache.txt"
+
+  # String match separator regression
+  rg -n "string match.*'.*--.*'" "$F" | rg -v '#' > "$D/gap-string-separator.txt"
 
   wc -l "$D"/gap-*.txt
   ```
 
+───────────────────────────────────────────────────────────────
+ PHASE CHECKLIST
+───────────────────────────────────────────────────────────────
+
 ═══════════════════════════════════════════════════════════════
- PHASE 1: FISH SYNTAX & COMPLIANCE (20 checks)
+ PHASE 1: FISH SHELL COMPLIANCE (20 checks)
 ═══════════════════════════════════════════════════════════════
 
   Exempt: Hits in embedded content (ExecStart, awk, heredocs, lint
@@ -364,12 +478,12 @@ PASS 4: GAP ANALYSIS (phase 13)
        [ ] 38. Root check/env setup silent before --help/--version parse
 
 ═══════════════════════════════════════════════════════════════
- PHASE 3: ERROR HANDLING & EXIT CODES (23 checks)
+ PHASE 3: ERROR HANDLING & EXIT CODES (24 checks)
 ═══════════════════════════════════════════════════════════════
 
   3.1  EXIT CODES
        [ ] 39. 0: success/help/version  [ ] 40. 1: runtime errors
-       [ ] 41. 2: usage errors  [ ] 42. 130: SIGINT (128+2)
+       [ ] 41. 2: usage errors  [ ] 42. 130: SIGINT (128+2), 141: SIGPIPE (128+13)
        [ ] 43. Functions use return not exit
        [ ] 44. No bare exit without code  [ ] 45. No exit inside functions
 
@@ -379,6 +493,7 @@ PASS 4: GAP ANALYSIS (phase 13)
 
   3.3  SIGNAL HANDLERS
        [ ] 50. INT  [ ] 51. TERM  [ ] 52. HUP  [ ] 53. fish_exit
+       [ ] 314. PIPE (v3.2.5: _cleanup_pipe, exit 141, no stderr on broken pipe)
        [ ] 54. Handlers don't mask exit code
 
   3.4  CLEANUP GUARANTEE
@@ -450,10 +565,10 @@ PASS 4: GAP ANALYSIS (phase 13)
        [ ] 121. Paths (canonical, no traversal)  [ ] 122. Numeric ranges
 
 ═══════════════════════════════════════════════════════════════
- PHASE 6: EMBEDDED CONFIG CONTENT (47 checks)
+ PHASE 6: EMBEDDED CONFIG CONTENT (50 checks)
 ═══════════════════════════════════════════════════════════════
 
-  3 arrays: SYSTEM (11), USER (3), SERVICE (2) = 16 files.
+  3 arrays: SYSTEM (12), USER (3), SERVICE (2) = 17 files.
 
   6.1  SYSTEMD-BOOT
        [ ] 123. key<space>value (no =)  [ ] 124. Valid keys only
@@ -517,8 +632,18 @@ PASS 4: GAP ANALYSIS (phase 13)
        [ ] 167. fish --no-execute valid  [ ] 168. Guards present
        [ ] 169. SSH auth sock priority (forwarded > gcr > systemd)
 
+  6.15 SYSCTL.D (v3.2.0)
+       [ ] 338. key = value format (spaces around =), comment header
+               references CachyOS vendor 70-cachyos-settings.conf
+       [ ] 339. No overlap with CachyOS vendor sysctl; only keys NOT
+               in 70-cachyos-settings.conf (BBR, fq, tcp_fastopen, inotify)
+       [ ] 340. 4 required keys present: net.core.default_qdisc = fq,
+               net.ipv4.tcp_congestion_control = bbr,
+               net.ipv4.tcp_fastopen = 3,
+               fs.inotify.max_user_watches = 524288
+
 ═══════════════════════════════════════════════════════════════
- PHASE 7: CROSS-REFERENCES & CONSISTENCY (25 checks)
+ PHASE 7: CROSS-REFERENCES & CONSISTENCY (24 checks)
 ═══════════════════════════════════════════════════════════════
 
   7.1  VERSION SYNC
@@ -526,11 +651,11 @@ PASS 4: GAP ANALYSIS (phase 13)
        [ ] 172. Changelog entry exists  [ ] 173. Lint verifies auto
 
   7.2  FILE COUNTS
-       [ ] 174. SYSTEM count = get_file_content cases
-       [ ] 175. USER count = get_file_content glob cases
-       [ ] 176. SERVICE count = get_file_content service cases
+       [ ] 174. SYSTEM count = 12, get_file_content system cases = 12
+       [ ] 175. USER count = 3, get_file_content glob cases = 3
+       [ ] 176. SERVICE count = 2, get_file_content service cases = 2
        [ ] 177. Progress steps = actual calls
-       [ ] 178. README count = total  [ ] 179. '*' fallback returns 1
+       [ ] 178. README count = 17 total  [ ] 179. '*' fallback returns 1
 
   7.3  PARAMETER CROSS-REFS
        [ ] 180. modprobe.d blacklist-only (regression)
@@ -540,15 +665,17 @@ PASS 4: GAP ANALYSIS (phase 13)
 
   7.4  README ↔ HELP
        [ ] 184. All --help options in README
-       [ ] 185. Sub-options documented (--diff --fix, --watch --once, etc.)
-       [ ] 186. Modifiers as separate entries (--fix, --stress, --json, etc.)
+       [ ] 185. Sub-options documented (--diff --fix, --diagnose --stress,
+               --diagnose --gaming, etc.)
+       [ ] 186. Modifiers as separate entries (--fix, --stress, --gaming, etc.)
        [ ] 187. --logs sub-targets documented
        [ ] 188. --install-file documented  [ ] 189. Exit codes documented
+               (must include 0, 1, 2, 130, 141 in both --help and README)
        [ ] 190. Prerequisites listed
 
   7.5  MODE CROSS-REFS
        [ ] 191. --watch + --interval in README  [ ] 192. --no-log in README
-       [ ] 193. --watch --once in README  [ ] 194. --profile in README
+       [ ] 193. --profile in README
 
 ═══════════════════════════════════════════════════════════════
  PHASE 8: FUNCTION ARCHITECTURE (37 checks)
@@ -672,7 +799,7 @@ PASS 4: GAP ANALYSIS (phase 13)
        [ ] 287. Backup before overwrite  [ ] 288. Recovery documented
 
 ═══════════════════════════════════════════════════════════════
- PHASE 12: RUNTIME EXECUTION (30 checks)
+ PHASE 12: RUNTIME EXECUTION (27 checks)
 ═══════════════════════════════════════════════════════════════
 
   Prerequisite: fish installed. Use PASS 3 harness above.
@@ -686,13 +813,14 @@ PASS 4: GAP ANALYSIS (phase 13)
   12.2 EXIT CODE MATRIX
        [ ] 293. 0: --help, -h, --version, -v, --lint, --completions,
                --test-all, --logs list/system, --dry-run, -n,
-               --profile --dry-run
+               --profile --dry-run, -a --dry-run, --diagnose --gaming --dry-run,
+               --all --diagnose --dry-run
        [ ] 294. 2: invalid flag, conflicts, modifier-only (--fix/--stress
-               /--once alone), bad --interval, --install-file no path,
+               alone), bad --interval, --install-file no path,
                --diff relative/path
        [ ] 295. 1: runtime failures (verify-static no sudo, etc.)
-       [ ] 296. Modifier WARN (not exit 2): --interval/--json/--once
-               without parent mode
+       [ ] 296. Modifier WARN (not exit 2): --interval without parent mode,
+               --gaming without --diagnose
 
   12.3 OPTION VALIDATION
        [ ] 297. Every flag accepted  [ ] 298. Modifier guards enforced
@@ -704,6 +832,7 @@ PASS 4: GAP ANALYSIS (phase 13)
   12.4 NO_COLOR
        [ ] 304. 0 ANSI escapes across ALL modes with --no-color.
                Includes do_watch clear-screen fallback to newlines (v2.8.3).
+               Includes --diagnose --gaming (v3.2.5).
 
   12.5 DRY-RUN
        [ ] 305. [DRY] messages, 0 filesystem changes
@@ -719,15 +848,10 @@ PASS 4: GAP ANALYSIS (phase 13)
        [ ] 312. --diff <path>: shows single file diff
        [ ] 313. --no-log --version: clean exit 0
 
-  12.8 --WATCH --ONCE (v2.8.0)
-       [ ] 314. Non-tty: exits 0, dashboard output (tty gate relaxed)
-       [ ] 315. Renders one frame then exits (no loop/prompt)
-       [ ] 316. --once without --watch: WARN + resets (no exit 2)
-
-  12.9 --PROFILE (v2.8.1)
+  12.8 --PROFILE (v2.8.1)
        [ ] 325. [PROFILE] on stderr, NO_COLOR respected, absent when unset
 
-  12.10 DO_WATCH ISATTY GUARD (v2.8.4)
+  12.9 DO_WATCH ISATTY GUARD (v2.8.4)
        [ ] 326. Color output in do_watch gated by isatty 1 (not just
                NO_COLOR). Non-tty stdout suppresses ANSI escapes even
                without --no-color. Regression: rg 'isatty 1' do_watch.
@@ -759,18 +883,19 @@ PASS 4: GAP ANALYSIS (phase 13)
                terminators, verify_pid race check present
 
 ═══════════════════════════════════════════════════════════════
- PHASE 14: v3.1.0 HELPERS & REGRESSIONS (11 checks)
+ PHASE 14: v3.1.0–v3.2.5 SPECIFICS (36 checks)
 ═══════════════════════════════════════════════════════════════
 
-  Use PASS 1 P14 data. Verify new helpers and removed-feature regressions.
+  Use PASS 1 P14 data. Verify helpers, sysctl, regressions, audit fixes,
+  race fixes, SIGPIPE, boot sanity, gaming flag, kernel param validation.
 
-  14.1 KVER GLOBALS
+  14.1 KVER GLOBALS (v3.1.0)
        [ ] 327. KVER, KVER_MAJOR, KVER_MINOR initialized at top level
                BEFORE _ntsync_state or any kernel-version-dependent code.
                Parse validation: non-numeric fallback to 0.
                Regression: 0 inline uname -r calls outside KVER init.
 
-  14.2 RETURN-VALUE HELPERS (stdout contract)
+  14.2 RETURN-VALUE HELPERS (v3.1.0, stdout contract)
        [ ] 328. _ntsync_state: returns exactly one of 5 states via stdout
                (unavailable|builtin|loaded|loaded_nodev|missing). All 6+
                callers capture into local via set -l _ns (_ntsync_state).
@@ -780,7 +905,7 @@ PASS 4: GAP ANALYSIS (phase 13)
        [ ] 330. _find_pacnew_files: returns file paths via stdout. Callers
                capture into list. No stale inline sudo find calls remain.
 
-  14.3 VERIFICATION HELPERS
+  14.3 VERIFICATION HELPERS (v3.1.0)
        [ ] 331. _verify_unit_syntax: --user auto-detect via path match
                '*/.config/systemd/user/*'. Passes $user_flag to
                systemd-analyze verify. Handles missing systemd-analyze
@@ -789,14 +914,14 @@ PASS 4: GAP ANALYSIS (phase 13)
                is-enabled. Handles not-installed (file missing) with _warn.
                Callers: amdgpu-performance.service, cpupower-epp.service.
 
-  14.4 HELPER DEDUPLICATION
+  14.4 HELPER DEDUPLICATION (v3.1.0)
        [ ] 333. No orphaned inline versions of consolidated helpers:
                - 0 inline uname -r (outside KVER init + comments)
                - 0 inline sudo find pacnew (outside _find_pacnew_files)
                - 0 inline systemd-analyze head (outside _get_boot_time)
                - 0 NTSYNC_SUPPORTED global remnants
 
-  14.5 REMOVED-FEATURE REGRESSIONS
+  14.5 REMOVED-FEATURE REGRESSIONS (v3.1.0)
        [ ] 334. sp5100_tco: not in MODPROBE_BLACKLIST. CachyOS vendor
                blacklist + nowatchdog cmdline handle it.
                rg -i 'sp5100' → 0 hits (or comment-only).
@@ -807,11 +932,165 @@ PASS 4: GAP ANALYSIS (phase 13)
        [ ] 336. power-profiles-daemon: in MASK array, NOT in PKGS_DEL.
                Prevents dependency reinstallation conflicts.
 
-  14.6 HOOK VALIDATION
+  14.6 HOOK VALIDATION (v3.1.0)
        [ ] 337. validate_mkinitcpio_hooks --existence-only flag: verify_static
                passes --existence-only when checking installed mkinitcpio.conf.
                Flag skips order checking and only confirms hook existence.
                Full order validation used only for embedded content.
+
+  14.7 SYSCTL.D INTEGRATION (v3.2.0)
+       [ ] 341. /etc/sysctl.d/99-ry-sysctl.conf in SYSTEM_DESTINATIONS
+               (12th entry). MANAGED_FILE_COUNT = 17. get_file_content
+               has matching case with correct printf content.
+       [ ] 342. verify_static sysctl section: 4 _chk_grep checks for
+               default_qdisc=fq, tcp_congestion_control=bbr,
+               tcp_fastopen=3, max_user_watches=524288.
+       [ ] 343. verify_runtime sysctl section: reads /proc/sys/ paths for
+               all 4 keys, compares against expected values, uses
+               cat -- with 2>/dev/null and string trim --.
+       [ ] 344. do_diagnose: Sysctl Tuning section present. Checks all 4
+               keys with same /proc/sys pattern. Increments checks/issues
+               counters correctly.
+       [ ] 345. _install_configure_services: sysctl --system reload present
+               after resolved restart, gated by file existence check and
+               _ask prompt. Failure handled with _warn.
+       [ ] 346. do_install_file: sysctl.d path match via
+               string match -q '*/sysctl.d/*'. Triggers sysctl --system
+               reload with _ask + _run + _warn on failure.
+
+  14.8 AUDIT FIXES (v3.1.1–v3.1.4)
+       [ ] 347. _install_finalize: returns 1 when INSTALL_HAD_ERRORS=true.
+               Caller (do_install dispatch) checks both $install_status
+               and INSTALL_HAD_ERRORS. No silent success on partial failure.
+       [ ] 348. cat -- terminators: _run output capture uses cat -- (not
+               bare cat). Verify L1110, L1113 region (or equivalent).
+               rg 'cat --' should show terminators in capture paths.
+       [ ] 349. --description on all functions: every function declaration
+               includes --description flag. Function count = description
+               count. rg -c '^function ' = rg -c -- '--description'.
+       [ ] 350. 71+ inline comments (v3.1.3): section headers, magic number
+               annotations, design rationale for lock, credentials, atomic
+               writes, hex normalization, vfat skip, NM/IWD gate, GKeyFile
+               escape. Spot-check: rg -c '#' shows comment density increase.
+
+  14.9 ORPHAN LOG & RACE FIXES (v3.2.2–v3.2.3)
+       [ ] 351. Orphan log cleanup on early exit paths: every exit 2 in arg
+               parser preceded by `test "$LOG_FILE" != /dev/null; and rm -f
+               -- "$LOG_FILE"`. Covers --diff relative/path, --interval
+               invalid/missing, --install-file no path, --help, --version,
+               unknown option. Pattern: no exit 2 without LOG_FILE guard.
+       [ ] 352. --no-log orphan cleanup: both _cleanup (signal) and
+               _cleanup_on_exit (fish_exit) remove install-TIMESTAMP.jsonl
+               when LOG_FILE=/dev/null. Covers all 9+ early exit paths.
+               rg 'install-.*jsonl' in both handlers.
+       [ ] 353. Footer race fix: _FOOTER_WRITTEN set BEFORE printf footer
+               (not after). Prevents signal handler from writing duplicate
+               JSONL footer between printf and flag set. Trade-off accepted:
+               if printf fails after flag, no footer (disk-full would fail
+               both paths). rg -A1 '_FOOTER_WRITTEN true' should show
+               printf on next line.
+       [ ] 354. Log rotation under write lock: rotation gated by _has_lock
+               flag. Only write modes (install, clean, diff --fix) rotate.
+               Read-only modes defer to next write run. No find+rm before
+               _acquire_lock. rg '_has_lock' shows gate pattern.
+       [ ] 355. LC_ALL=C on backup rotation sort: ISO-date directory names
+               sorted with LC_ALL=C to prevent locale-dependent ordering.
+               rg 'LC_ALL=C sort' in _backup_init region.
+       [ ] 356. LC_ALL=C on log rotation sort: log file listing sorted
+               with LC_ALL=C for consistent oldest-first ordering.
+               rg 'LC_ALL=C sort' in log rotation region.
+
+  14.10 SIGPIPE HANDLER (v3.2.5)
+       [ ] 357. _cleanup_pipe: --on-signal PIPE handler with exit 141.
+               Fish does not auto-ignore SIGPIPE; piping script output to
+               head/grep could kill without cleanup or lock release.
+               Requirements:
+               - Skips all stderr output (pipe may be broken)
+               - Writes JSONL footer to LOG_FILE (file write, not pipe)
+               - Sets _CLEANUP_DONE=true before _do_cleanup
+               - Calls _do_cleanup (tmpfiles, lock, keepalive)
+               - Exits 141 (128+13 = SIGPIPE convention)
+               - _cleanup_on_exit fish_exit handler recognizes exit 141
+               - show_help documents exit code 141
+               Cross-ref with check 314.
+
+  14.11 KERNEL PARAM VALIDATION (v3.2.5)
+       [ ] 358. _validate_kernel_params: maps cmdline param prefixes to
+               CONFIG_ symbols (param_config_map), reads /proc/config.gz,
+               warns if cmdline params reference features not compiled in.
+               Requirements:
+               - Graceful skip when /proc/config.gz unavailable
+               - Only maps params that depend on compile-time features
+               - nowatchdog intentionally excluded (no-op either way)
+               - Checks CONFIG_=y or =m (not =n or absent)
+               - Called from verify_runtime
+               - Returns mismatch count for caller error tracking
+
+  14.12 BOOT SANITY GATE (v3.2.5)
+       [ ] 359. _preflight_boot_sanity: post-rebuild verification gate.
+               Called after mkinitcpio -P and sdboot-manage in
+               _install_rebuild_boot. Failure sets INSTALL_HAD_ERRORS.
+               Requirements:
+               - At least one vmlinuz-* exists and is non-zero
+               - Every initramfs-*.img is non-zero
+               - At least one boot entry .conf references existing kernel
+               - Failure message includes "DO NOT REBOOT" + recovery steps
+               - Does NOT prevent script completion (sets error flag only)
+
+  14.13 SYSFS TEMP READS (v3.2.5)
+       [ ] 360. _gather_temps: reads sysfs hwmon directly instead of
+               forking lm_sensors `sensors` command. Consistent with
+               do_watch's existing sysfs pattern.
+               Requirements:
+               - No `sensors` or `lm_sensors` command dependency at runtime
+               - Iterates /sys/class/hwmon/hwmon*/temp*_input
+               - Reads name file for sensor identification (k10temp, amdgpu)
+               - Fan data via /sys/class/hwmon/hwmon*/fan*_input
+               - Handles missing/unreadable sysfs files gracefully
+               - lm_sensors stays in PKGS_ADD (for sensor detection data)
+
+  14.14 GAMING DIAGNOSTICS FLAG (v3.2.5)
+       [ ] 361. _diagnose_gaming extracted behind --gaming flag. Moves
+               Vulkan, session, media codecs, Steam/Proton checks into
+               separate function enabled by --diagnose --gaming or --all.
+               Requirements:
+               - GAMING global initialized false at top level
+               - CLI parser accepts --gaming, sets GAMING=true
+               - --gaming without --diagnose → WARN + ignore (not exit 2)
+               - --all + --diagnose auto-enables GAMING=true
+               - _diagnose_gaming uses --no-scope-shadowing for counter
+                 access (checks/issues from do_diagnose)
+               - Function called conditionally: if GAMING=true in do_diagnose
+               - --help documents --gaming flag and --diagnose --gaming combo
+               - Completions include --gaming
+
+  14.15 DEAD GLOBAL REMOVAL (v3.2.5)
+       [ ] 362. MODULES_LOAD and _LOCK_METHOD globals removed.
+               MODULES_LOAD: obsolete after modules-load.d removal (v3.1.0).
+               _LOCK_METHOD: obsolete after mkdir-only lock (v2.8.2).
+               rg 'MODULES_LOAD|_LOCK_METHOD' → 0 hits.
+               Cross-ref: check 218 (flock regression), check 143
+               (modules-load.d regression).
+
+  14.16 CLEAN DOTFILE FIX (v3.2.5)
+       [ ] 363. do_clean: Steam and AUR cache cleanup uses
+               find "$d" -mindepth 1 ... instead of rm -rf "$d"/*.
+               Shell glob skips dotfiles (e.g., .steam hidden dirs);
+               find -mindepth 1 does not. Verify no rm -rf "$d"/* pattern
+               remains in do_clean for cache directories.
+
+  14.17 LOG TIMESTAMP SIMPLIFICATION (v3.2.5)
+       [ ] 364. _log uses direct date '+%Y-%m-%dT%H:%M:%S' call per
+               invocation. No timestamp cache variable (_TS_CACHE or
+               similar). No /proc/uptime reads. Trade-off: ~1ms per log
+               call, negligible vs I/O. rg '_TS_CACHE|/proc/uptime' → 0.
+
+  14.18 STRING MATCH SEPARATOR FIX (v3.2.5)
+       [ ] 365. verify_runtime cmdline check: string match -- separator
+               is outside quoted string as Fish end-of-options marker,
+               not inside quoted string as literal text ' -- '. Verify
+               the pattern uses `string match -q -- <pattern> <string>`
+               form, not `string match -q '... -- ...' <string>`.
 
 ═══════════════════════════════════════════════════════════════
  PASS 5: FINALIZE
@@ -834,19 +1113,19 @@ STEP 2: SUMMARY TABLE
   -------|--------|------|------|-----
   1      | 20     |      |      |
   2      | 18     |      |      |
-  3      | 23     |      |      |
+  3      | 24     |      |      |
   4      | 24     |      |      |
   5      | 37     |      |      |
-  6      | 47     |      |      |
-  7      | 25     |      |      |
+  6      | 50     |      |      |
+  7      | 24     |      |      |
   8      | 37     |      |      |
   9      | 15     |      |      |
   10     | 19     |      |      |
   11     | 23     |      |      |
-  12     | 30     |      |      |
+  12     | 27     |      |      |
   13     | 8      |      |      |
-  14     | 11     |      |      |
-  TOTAL  | 337    |      |      |
+  14     | 36     |      |      |
+  TOTAL  | 362    |      |      |
 
   CRITICAL: N | HIGH: N | MED: N | LOW: N | INFO: N
 
@@ -864,6 +1143,25 @@ STEP 2: SUMMARY TABLE
   - 333: helper dedup, expect 0 orphaned inline versions
   - 334-336: removed-feature regressions (sp5100_tco, btusb, ppd)
   - 337: --existence-only hook validation split
+  - 338-340: sysctl.d format, vendor non-overlap, 4 required keys
+  - 341-346: sysctl.d integration across all modes
+  - 347: _install_finalize INSTALL_HAD_ERRORS propagation (v3.1.4)
+  - 348: cat -- terminators in _run capture (v3.1.4)
+  - 349: --description parity with function count (v3.1.2)
+  - 350: inline comment density increase (v3.1.3)
+  - 351-352: orphan log cleanup (v3.2.2)
+  - 353: footer race — flag before write (v3.2.3)
+  - 354: log rotation under write lock (v3.2.3)
+  - 355-356: LC_ALL=C on date-sorted file listings (v3.2.3)
+  - 314, 357: SIGPIPE handler — _cleanup_pipe, exit 141 (v3.2.5)
+  - 358: _validate_kernel_params — cmdline vs /proc/config.gz (v3.2.5)
+  - 359: _preflight_boot_sanity — post-rebuild boot gate (v3.2.5)
+  - 360: _gather_temps — sysfs hwmon, no lm_sensors fork (v3.2.5)
+  - 361: _diagnose_gaming — --gaming flag extraction (v3.2.5)
+  - 362: dead global removal — MODULES_LOAD, _LOCK_METHOD (v3.2.5)
+  - 363: do_clean dotfile fix — find -mindepth 1 (v3.2.5)
+  - 364: _log timestamp simplification (v3.2.5)
+  - 365: string match -- separator fix in verify_runtime (v3.2.5)
 
   Verdict: deploy-ready | fix-required | redesign-needed
 
